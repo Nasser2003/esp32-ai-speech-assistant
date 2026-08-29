@@ -1,5 +1,14 @@
 # Project synthese
 In this document, I will describe each step of developping this project in order to not forget how I did it.
+## Topics I will learn in this project
+- Use advanced ESP32 features (flash storage, I2C communication, mic, sound, oled screen)
+- Manage complex state machine on ESP32
+- Deploy my first ai assistant with Ollama and use it in the project
+- Deploy a model that transcripts audio received from the esp32 mic.
+- Learn C++ and make modular code
+- Create web sockets on ESP
+- Stream full-duplex audio and text information between ESP32 and API
+- 
 
 ## 1. ESP32
 ### PlatformIO

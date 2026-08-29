@@ -26,8 +26,8 @@ AudioRecorder::AudioRecorder(
     : sckPin(sckPin), // Serial Clock (SCK) used to synchronize data transmission between the ESP32 and the INMP441 microphone
       wsPin(wsPin), // Word Select (WS) used to indicate the start of a new audio sample and to select the left or right channel for stereo audio
       sdPin(sdPin), // Serial Data (SD) used to transmit the audio data from the INMP441 microphone to the ESP32
-      wavMaxBuffer(nullptr), // Buffer to store the recorded audio data in WAV format
-      wavMaxSize(0), // Size of the recorded audio data in bytes
+      wavBuffer(nullptr), // Buffer to store the recorded audio data in WAV format
+      wavSize(0), // Size of the recorded audio data in bytes
 
       recordingStartTime(0),
       recordingTimeout(0),
@@ -35,7 +35,7 @@ AudioRecorder::AudioRecorder(
       hpPrevIn(0.0f),
       hpPrevOut(0.0f),
 
-      pcmMaxData(nullptr),
+      pcmData(nullptr),
 
       maxSampleCount(0),
       samplesWritten(0),
@@ -114,7 +114,7 @@ bool AudioRecorder::startRecording(uint32_t timeoutSeconds)
         maxSampleCount *
         sizeof(int16_t);
 
-    wavMaxSize =
+    wavSize =
         WAV_HEADER_SIZE +
         pcmMaxSize;
 
@@ -123,18 +123,18 @@ bool AudioRecorder::startRecording(uint32_t timeoutSeconds)
     // 3. Allocate maximum WAV buffer in PSRAM
     // --------------------------------------------------
 
-    wavMaxBuffer =
+    wavBuffer =
         static_cast<uint8_t*>(
-            ps_malloc(wavMaxSize)
+            ps_malloc(wavSize)
         );
 
-    if (wavMaxBuffer == nullptr) {
+    if (wavBuffer == nullptr) {
         Serial.printf(
             "[AudioRecorder] PSRAM allocation failed: %u bytes\n",
-            static_cast<unsigned>(wavMaxSize)
+            static_cast<unsigned>(wavSize)
         );
 
-        wavMaxSize = 0;
+        wavSize = 0;
 
         return false;
     }
@@ -144,9 +144,9 @@ bool AudioRecorder::startRecording(uint32_t timeoutSeconds)
     // 4. Prepare PCM data location
     // --------------------------------------------------
 
-    pcmMaxData =
+    pcmData =
         reinterpret_cast<int16_t*>(
-            wavMaxBuffer +
+            wavBuffer +
             WAV_HEADER_SIZE
         );
 
@@ -303,8 +303,7 @@ void AudioRecorder::update()
         // Store sample
         // --------------------------------------------------
 
-        pcmMaxData[samplesWritten++] =
-            sample;
+        pcmData[samplesWritten++] = sample; // Store the sample in the PCM buffer and increment the sample count
 
 
         // --------------------------------------------------
@@ -348,52 +347,88 @@ bool AudioRecorder::stopRecording()
 
     isRecording = false;
 
-
     // --------------------------------------------------
     // Calculate actual recording size
     // --------------------------------------------------
 
-    const size_t pcmSize =
-        samplesWritten *
-        sizeof(int16_t);
+    const size_t pcmSize = samplesWritten * sizeof(int16_t);
 
 
     // --------------------------------------------------
-    // Find signal peak
+    // Build amplitude histogram
     // --------------------------------------------------
 
-    const int32_t peak =
-        std::max(
+    uint32_t histogram[NORMALIZATION_BINS] = {};
+
+    for (size_t i = 0; i < samplesWritten; ++i) {
+
+        const int32_t amplitude =
             std::abs(
-                static_cast<int32_t>(minSample)
-            ),
-            std::abs(
-                static_cast<int32_t>(maxSample)
-            )
+                static_cast<int32_t>(pcmData[i])
+            );
+
+        const size_t bin =
+            static_cast<size_t>(
+                (static_cast<uint64_t>(amplitude) *
+                 NORMALIZATION_BINS) /
+                32768
+            );
+
+        const size_t safeBin =
+            std::min(
+                bin,
+                NORMALIZATION_BINS - 1
+            );
+
+        histogram[safeBin]++;
+    }
+
+
+    // --------------------------------------------------
+    // Find percentile amplitude
+    // --------------------------------------------------
+
+    const size_t targetSamples =
+        static_cast<size_t>(
+            samplesWritten *
+            NORMALIZATION_PERCENTILE
         );
 
+    size_t accumulatedSamples = 0;
+    int32_t normalizationPeak = 0;
+
+    for (size_t i = 0; i < NORMALIZATION_BINS; ++i) {
+
+        accumulatedSamples += histogram[i];
+
+        if (accumulatedSamples >= targetSamples) {
+
+            normalizationPeak =
+                static_cast<int32_t>(
+                    ((i + 1) * 32768) /
+                    NORMALIZATION_BINS
+                );
+
+            break;
+        }
+    }
 
     // --------------------------------------------------
     // Normalize volume
     // --------------------------------------------------
 
-    if (peak > 0) {
+    if (normalizationPeak > 0) {
 
         const float gain =
             (INT16_MAX * TARGET_LEVEL) /
-            static_cast<float>(peak);
+            static_cast<float>(normalizationPeak);
 
-        for (
-            size_t i = 0;
-            i < samplesWritten;
-            ++i
-        ) {
+        for (size_t i = 0; i < samplesWritten; ++i) {
 
             int32_t amplified =
                 static_cast<int32_t>(
-                    pcmMaxData[i] * gain
+                    pcmData[i] * gain
                 );
-
 
             // Prevent overflow.
             if (amplified > INT16_MAX) {
@@ -404,41 +439,36 @@ bool AudioRecorder::stopRecording()
                 amplified = INT16_MIN;
             }
 
-            pcmMaxData[i] =
-                static_cast<int16_t>(
-                    amplified
-                );
+            pcmData[i] =
+                static_cast<int16_t>(amplified);
         }
 
         Serial.printf(
-            "[AudioRecorder] Normalized, gain x%.2f\n",
-            gain
+            "[AudioRecorder] Normalized, gain x%.2f, "
+            "percentile peak: %ld\n",
+            gain,
+            normalizationPeak
         );
     }
-
 
     // --------------------------------------------------
     // Calculate actual WAV size
     // --------------------------------------------------
 
-    wavMaxSize =
-        WAV_HEADER_SIZE +
-        pcmSize;
-
+    wavSize = WAV_HEADER_SIZE + pcmSize;
 
     // --------------------------------------------------
     // Create WAV header
     // --------------------------------------------------
 
     writeWavHeader(
-        wavMaxBuffer,
+        wavBuffer,
         static_cast<uint32_t>(pcmSize)
     );
 
-
     Serial.printf(
         "[AudioRecorder] Recording finished: %u bytes\n",
-        static_cast<unsigned>(wavMaxSize)
+        static_cast<unsigned>(wavSize)
     );
 
     return true;
@@ -446,7 +476,7 @@ bool AudioRecorder::stopRecording()
 
 bool AudioRecorder::save(const char* path)
 {
-    if (wavMaxBuffer == nullptr || wavMaxSize == 0) {
+    if (wavBuffer == nullptr || wavSize == 0) {
         Serial.println(
             "[AudioRecorder] No recording to save"
         );
@@ -478,17 +508,17 @@ bool AudioRecorder::save(const char* path)
 
     const size_t written =
         file.write(
-            wavMaxBuffer,
-            wavMaxSize
+            wavBuffer,
+            wavSize
         );
 
     file.close();
 
-    if (written != wavMaxSize) {
+    if (written != wavSize) {
         Serial.printf(
             "[AudioRecorder] Write error: %u/%u bytes\n",
             static_cast<unsigned>(written),
-            static_cast<unsigned>(wavMaxSize)
+            static_cast<unsigned>(wavSize)
         );
 
         return false;
@@ -497,7 +527,7 @@ bool AudioRecorder::save(const char* path)
     Serial.printf(
         "[AudioRecorder] Saved: %s (%u bytes)\n",
         path,
-        static_cast<unsigned>(wavMaxSize)
+        static_cast<unsigned>(wavSize)
     );
 
     return true;
@@ -514,22 +544,22 @@ void AudioRecorder::clear()
     }
 
 
-    if (wavMaxBuffer != nullptr) {
-        free(wavMaxBuffer);
+    if (wavBuffer != nullptr) {
+        free(wavBuffer);
 
-        wavMaxBuffer = nullptr;
+        wavBuffer = nullptr;
     }
 
-    pcmMaxData = nullptr;
+    pcmData = nullptr;
 
-    wavMaxSize = 0;
+    wavSize = 0;
     maxSampleCount = 0;
     samplesWritten = 0;
 }
 
 size_t AudioRecorder::getSize() const
 {
-    return wavMaxSize;
+    return wavSize;
 }
 
 bool AudioRecorder::isRecordingState() const
@@ -539,7 +569,7 @@ bool AudioRecorder::isRecordingState() const
 
 const uint8_t* AudioRecorder::data() const
 {
-    return wavMaxBuffer;
+    return wavBuffer;
 }
 
 // PRIVATE METHODS
@@ -586,7 +616,7 @@ i2s_config_t AudioRecorder::createConfig() {
     config.sample_rate = SAMPLE_RATE; // number of measurements per second (ex: 16 kHz)
     config.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT; // Size of each audio sample (ex: 32 bits)
     config.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT; // INMP441 is mono, left channel only
-    config.communication_format = I2S_COMM_FORMAT_I2S; // How to interpret signals sent by the INMP441 microphone
+    config.communication_format = I2S_COMM_FORMAT_STAND_I2S; // How to interpret signals sent by the INMP441 microphone
     config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; // Interrupt level 1, the lowest priority, to avoid interfering with other tasks
     // DMA (Direct Memory Access) is used to transfer data between the I2S peripheral and memory without CPU intervention => faster
     //   => when 1st buffer is full, DMA will automatically switch to the 2nd buffer and trigger an interrupt to notify the CPU 

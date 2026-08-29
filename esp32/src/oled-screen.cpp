@@ -12,6 +12,10 @@
 #define OLED_RESET -1
 
 static Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
+enum ANIMATION_TYPE {
+	OVERRIDE,
+	COMPLETION
+};
 
 OledScreen128x32::OledScreen128x32(int SDA_PIN, int SCK_PIN, bool animated, int speed) : SDA_PIN(SDA_PIN), SCK_PIN(SCK_PIN), animated(animated), speed(speed) {
 	currentMessage = "";
@@ -38,16 +42,19 @@ void OledScreen128x32::displayMessage(std::string message) {
 	this->textShowStartTime = millis(); // to sync the animation timer with the new message
 }
 
+void OledScreen128x32::addMessage(std::string message) {
+	this->lastMessage = this->currentMessage;
+	this->currentMessage = this->currentMessage + message;
+	this->textShowStartTime = millis(); // to sync the animation timer with the new message
+}
+
 void OledScreen128x32::update() {
 	bool sameMessage = this->currentMessage == this->lastMessage;
 	if (sameMessage) {
 		return;
 	}
 	if (!this->animated) {
-		display.clearDisplay();
-		display.setCursor(0, 0);
-		display.print(currentMessage.c_str());
-		display.display();
+		showMessage(this->currentMessage);
 		return;
 	} else {
 		int speedRation = this->speed / 25; // relative speed
@@ -56,22 +63,42 @@ void OledScreen128x32::update() {
 		int t1Len = this->lastMessage.length();
 		int t2Len = this->currentMessage.length();
 
-		if (frame <= t1Len) {
-			display.clearDisplay();
-			display.setCursor(0, 0);
-			display.print(this->lastMessage.substr(0, t1Len - frame).c_str());
-			display.display();
-		} else if (frame <= t1Len + t2Len) {
-			display.clearDisplay();
-			display.setCursor(0, 0);
-			display.print(this->currentMessage.substr(0, frame - t1Len).c_str());
-			display.display();
-		} else {
-			this->lastMessage = this->currentMessage; // to avoid re-displaying the same message in the next update
+		ANIMATION_TYPE animationType = ANIMATION_TYPE::OVERRIDE;
+
+		bool doesMessageContinue = currentMessage.rfind(lastMessage, 0) == 0;
+		if (doesMessageContinue) {
+			animationType = ANIMATION_TYPE::COMPLETION;
+		}
+
+		switch (animationType) {
+		case ANIMATION_TYPE::OVERRIDE:
+			if (frame <= t1Len) {
+				showMessage(this->lastMessage.substr(0, t1Len - frame));
+			} else if (frame <= t1Len + t2Len) {
+				showMessage(this->currentMessage.substr(0, frame - t1Len));
+			} else {
+				this->lastMessage = this->currentMessage; // to avoid re-displaying the same message in the next update
+				showMessage(this->currentMessage);
+			}
+			break;
+		case ANIMATION_TYPE::COMPLETION:
+			if (frame <= (t2Len - t1Len)) {
+				showMessage(this->currentMessage.substr(0, t1Len + frame));
+			} else {
+				this->lastMessage = this->currentMessage; // to avoid re-displaying the same message in the next update
+				showMessage(this->currentMessage);
+			}
+			break;
 		}
 	}
 }
 
+void OledScreen128x32::showMessage(std::string message) {
+	display.clearDisplay();
+	display.setCursor(0, 0);
+	display.print(message.c_str());
+	display.display();
+}
 
 // EXAMPLE
 // constexpr int SDA_PIN = 15;

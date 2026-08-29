@@ -5,19 +5,22 @@
 #include "sinus-pulse.h"
 #include "timer.h"
 #include "state.h"
+#include "credentials.h"
+#include <WiFi.h>
 
 // Variables
 AudioPlayer audioPlayer(39, 42, 3);
-OledScreen128x32 screen(15, 7, true);
+OledScreen128x32 screen(15, 7, true, 150);
 AudioRecorder recorder(18,17,40);
 SinusPulse blueLedPulse(1, 270);
 
 // Timers
+Timer preInitTimer(10);
 Timer initTimer(2000);
-Timer preInitTimer(1);
+Timer connected_wifi(1000);
 Timer minRecordingTimer(2000);
 Timer maxRecordingTimer(15000);
-Timer recordStopTimer(2000);
+Timer recordStopTimer(1000);
 
 Timer updateTimer(2);
 
@@ -45,12 +48,11 @@ void setup()
     ledcAttachPin(BLUE_LED, 0); // PWM way to setup pinMode
     screen.init();
     preInitTimer.start();
+    WiFi.setTxPower(WIFI_POWER_8_5dBm); // Set the WiFi transmission power to 8.5 dBm to avoid the brownout effect
 }
 
 void loop()
 {
-    // audioPlayer.loop();
-    // vTaskDelay(1);
     switch (currentState)
     {
     case State::INIT:
@@ -62,6 +64,30 @@ void loop()
             updateTimer.start();
         }
         if (initTimer.isElapsed()) 
+        {
+            currentState = State::CONNECTING_WIFI;
+        }
+        break;
+    case State::CONNECTING_WIFI:
+        if (executeOnlyOnceOnStateChange()) 
+        {
+            Serial.println("[CONNECTING_WIFI] Connecting to WiFi...");
+            screen.displayMessage("Connecting to WiFi...");
+            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        }
+        if (WiFi.status() == WL_CONNECTED) 
+        {
+            currentState = State::CONNECTED_WIFI;
+        }
+        break;
+    case State::CONNECTED_WIFI:
+        if (executeOnlyOnceOnStateChange()) 
+        {
+            Serial.println("[CONNECTED_WIFI] Connected to WiFi!");
+            screen.addMessage("\nConnected to WiFi!");
+            connected_wifi.start();
+        }
+        if (connected_wifi.isElapsed()) 
         {
             currentState = State::IDLE;
         }
@@ -84,7 +110,7 @@ void loop()
             currentRecordingState = RecordingState::INIT;
             Serial.println("[RECORDING] Recording audio...");
             screen.displayMessage("Recording audio...");
-            // recorder.startRecording();
+            recorder.startRecording();
             blueLedPulse.startPulse();
             minRecordingTimer.start();
             maxRecordingTimer.start();
@@ -107,6 +133,7 @@ void loop()
             screen.displayMessage("Stopping recording...");
             recorder.stopRecording();
             blueLedPulse.stopPulse();
+            recordStopTimer.start();
         }
         if (recordStopTimer.isElapsed())
         {
@@ -117,8 +144,17 @@ void loop()
     case State::WAITING_AI_RESPONSE:
         if (executeOnlyOnceOnStateChange())
         {
+            recorder.save("/recording.wav");
             Serial.println("[WAITING_AI_RESPONSE] Waiting for AI response...");
             screen.displayMessage("Waiting for AI response...");
+
+            if (!audioPlayer.init()) {
+                Serial.println("AudioPlayer initialization failed");
+            }
+            
+            audioPlayer.setVolume(10);
+
+            audioPlayer.play("/recording.wav");
         }
         break;
     default:
@@ -126,12 +162,13 @@ void loop()
     }
 
     // Update variables
-    if (updateTimer.isElapsed()) {
+    if (true || updateTimer.isElapsed()) {
         updateTimer.start();
 
         ledcWrite(0, blueLedPulse.getPulseState());
         recorder.update();
         screen.update();
+        audioPlayer.loop();
     }
     
 
