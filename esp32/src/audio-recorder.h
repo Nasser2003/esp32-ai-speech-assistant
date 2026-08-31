@@ -22,6 +22,8 @@ public:
 
     bool stopRecording();
 
+    const uint8_t* fetchRecordedChunk(size_t& size);
+
     bool save(const char* path);
 
     void clear();
@@ -45,6 +47,7 @@ private:
     static constexpr float TARGET_LEVEL = 0.9f;              // Target peak level after audio normalization (90% of full scale)
     static constexpr size_t NORMALIZATION_BINS = 256;        // Number of amplitude ranges used to build the normalization histogram
     static constexpr float NORMALIZATION_PERCENTILE = 0.995f; // Percentile used to ignore short abnormal peaks during normalization
+    static constexpr size_t RECORDED_SAMPLE_CHUNK_SIZE = 8000; // Maximum number of PCM samples returned per chunk (0.5 s at 16 kHz)
 
     // INMP441 I2S pins
     int sckPin;                                    // I2S serial clock (SCK/BCLK) pin
@@ -89,4 +92,7 @@ private:
     // I2S configuration
     i2s_config_t createConfig();                   // Creates the I2S configuration for the INMP441
     i2s_pin_config_t createPinConfig();            // Creates the I2S pin configuration
+
+    // audio chunking
+    int chunkCursor;                                // Current position in the PCM data for fetching recorded chunks
 };

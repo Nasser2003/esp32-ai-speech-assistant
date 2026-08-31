@@ -47,7 +47,8 @@ AudioRecorder::AudioRecorder(
       measuredSamples(0),
 
       initialized(false),
-      isRecording(false)
+      isRecording(false),
+      chunkCursor(0)
 {
     init();
 }
@@ -339,6 +340,46 @@ void AudioRecorder::update()
     }
 }
 
+
+const uint8_t* AudioRecorder::fetchRecordedChunk(size_t& size) 
+{ // "size_t& size" reference needed to implicitely return a second variable after "uint8_t*"
+    const size_t totalSamples = samplesWritten;
+
+
+    if (chunkCursor >= totalSamples) { // No new audio available at the size of a chunk
+        size = 0;
+        return nullptr;
+    }
+
+    const size_t remainingSamples = totalSamples - chunkCursor;
+
+    // While recording, wait until a complete chunk is available.
+    if (
+        isRecording &&
+        remainingSamples < RECORDED_SAMPLE_CHUNK_SIZE
+    ) {
+        size = 0;
+        return nullptr;
+    }
+
+    const size_t chunkStart = chunkCursor;
+
+    const size_t chunkSamples =
+        std::min(
+            remainingSamples,
+            RECORDED_SAMPLE_CHUNK_SIZE
+        );
+
+    chunkCursor += chunkSamples;
+
+    // Convert the number of samples to bytes.
+    size = chunkSamples * sizeof(int16_t);
+
+    return reinterpret_cast<const uint8_t*>(
+        pcmData + chunkStart
+    );
+}
+
 bool AudioRecorder::stopRecording()
 {
     if (!isRecording) {
@@ -555,6 +596,7 @@ void AudioRecorder::clear()
     wavSize = 0;
     maxSampleCount = 0;
     samplesWritten = 0;
+    chunkCursor = 0;
 }
 
 size_t AudioRecorder::getSize() const

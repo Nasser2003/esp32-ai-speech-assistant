@@ -8,6 +8,7 @@
 #include "credentials.h"
 #include <WiFi.h>
 
+
 // Variables
 AudioPlayer audioPlayer(39, 42, 3);
 OledScreen128x32 screen(15, 7, true, 150);
@@ -24,9 +25,11 @@ Timer recordStopTimer(1000);
 
 Timer updateTimer(2);
 
-// Constants
+// Pins
 constexpr int BUTTON_PIN = 2;
 constexpr int BLUE_LED = 14;
+
+// Constants
 
 // State machine
 State currentState = State::INIT;
@@ -49,6 +52,7 @@ void setup()
     screen.init();
     preInitTimer.start();
     WiFi.setTxPower(WIFI_POWER_8_5dBm); // Set the WiFi transmission power to 8.5 dBm to avoid the brownout effect
+    audioPlayer.setVolume(10);
 }
 
 void loop()
@@ -62,6 +66,9 @@ void loop()
             screen.displayMessage("Initializing the AI assistant...");
             initTimer.start();
             updateTimer.start();
+            if (!audioPlayer.init()) {
+                Serial.println("AudioPlayer initialization failed");
+            }
         }
         if (initTimer.isElapsed()) 
         {
@@ -105,16 +112,28 @@ void loop()
         }
         break;
     case State::RECORDING:
+    {
         if (executeOnlyOnceOnStateChange()) 
         {
             currentRecordingState = RecordingState::INIT;
+            audioPlayer.play("/button-press.wav");
             Serial.println("[RECORDING] Recording audio...");
             screen.displayMessage("Recording audio...");
             recorder.startRecording();
             blueLedPulse.startPulse();
             minRecordingTimer.start();
             maxRecordingTimer.start();
+        } else {
+            // Send one recorded segment if available
+            size_t chunkSize;
+            const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
+            Serial.printf("[RECORDING] Fetched recorded segment: %u bytes\n", static_cast<unsigned>(chunkSize));
+    
+            // if (segment != nullptr) {
+            //     webSocket.sendBIN(segment, segmentSize);
+            // }
         }
+
 
         if (!isButtonPressed() && minRecordingTimer.isElapsed())
         {
@@ -125,10 +144,12 @@ void loop()
             currentState = State::RECORDED;
         }
         break;
+    }
     case State::RECORDED:
     {
         if (executeOnlyOnceOnStateChange()) 
         {
+            audioPlayer.play("/button-release.wav");
             Serial.println("[RECORDED] Stopping recording...");
             screen.displayMessage("Stopping recording...");
             recorder.stopRecording();
@@ -147,13 +168,7 @@ void loop()
             recorder.save("/recording.wav");
             Serial.println("[WAITING_AI_RESPONSE] Waiting for AI response...");
             screen.displayMessage("Waiting for AI response...");
-
-            if (!audioPlayer.init()) {
-                Serial.println("AudioPlayer initialization failed");
-            }
-            
-            audioPlayer.setVolume(10);
-
+        
             audioPlayer.play("/recording.wav");
         }
         break;
