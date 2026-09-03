@@ -1,0 +1,9 @@
+flask
+flask_sock
+ollama
+flask_caching
+redis
+asyncio
+shortuuid
+faster-whisper
+numpy
