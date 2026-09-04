@@ -5,10 +5,10 @@ class Transcriptor:
     def __init__(self, MODEL):
         self.model = WhisperModel(MODEL, device="cpu", compute_type="int8", )
     
-    def transcribe(self, audio: bytes):
+    def transcribe(self, audio: bytes, language: str):
         audio = self._convert_binary_to_np(audio)
         
-        segments, _ = self.model.transcribe(audio, language="fr")
+        segments, _ = self.model.transcribe(audio, language=language)
         for segment in segments:
             text = segment.text.strip()
             if not text:

@@ -6,19 +6,41 @@ from redis_controller import RedisController
 import threading
 import shortuuid
 from transcriptor import Transcriptor
+from piper import PiperVoice
+import io
+import wave
 
 app = Flask(__name__)
 sock = Sock(app)
 
 # constants
 url = "127.0.0.1:11434/api/chat"
-AUDIO_STREAM_EXPIRE_TIME = 120  # 5 min sec
+TTL_EXPIRE_TIME = 120  # 5 min sec
 TRANSCRIPTION_CHUNK_SIZE = 48_000 # 3 seconds of audio at 16kHz, 16-bit PCM
 TRANSCRIPTION_WINDOW_SIZE = 0 # 1.5 seconds of audio at 16kHz, 16-bit PCM
-TRANS_MODEL = "base"
+TRANS_MODEL = "small"
 CHAT_MODEL = "llama3.2"
-PREFIX_AUDIO_STREAM = "audio_stream:" # recorded audio
-PREFIX_AUDIO_TRANS = "audio_trans:" # transcription
+
+# constant strings
+PREFIX_RECORD = "audio_record:" # recorded audio
+PREFIX_TRANSCRIPTION = "audio_trans:" # transcription
+PREFIX_AI_TEXT = "ai_text:" # ai text response
+PREFIX_AI_TTS = "ai_tts:" # ai audio response
+
+RECORDING_START = "/RECORDING START" # start recording audio stream
+RECORDING_END = "/RECORDING END"
+TRANSCRIPTION_START = "/TRANSCRIPTION START" # start transcription of the audio stream
+TRANSCRIPTION_END = "/TRANSCRIPTION END"
+AI_TEXT_START = "/AI TEXT START" # start sending ai textual answer to the client
+AI_TEXT_END = "/AI TEXT END"
+AI_TTS_START = "/AI TTS START" # start sending ai audio answer to the client
+AI_TTS_END = "/AI TTS END"
+
+VOICE_LANGUAGE = "fr"
+LANGUAGE_MAP = {
+    "en": "data/en_US-ryan-low.onnx",
+    "fr": "data/fr_FR-gilles-low.onnx",
+}
 
 # variables
 client = ollama.Client()
@@ -36,66 +58,79 @@ def ask():
         mimetype="text/plain"
     )
 
+
 @app.route('/', methods=['GET'])
 def home():
     return "Welcome to the AI Question Answering API!"
 
+
 @sock.route("/ws")
 def websocket(ws):
-    audio_stream_id = None
+    just_id = shortuuid.uuid()
+    audio_stream_id = PREFIX_RECORD + just_id
+    
     while True:
         message = ws.receive()
+        IS_SIGNAL = isinstance(message, str)
+        IS_RECORDING_START = IS_SIGNAL and message.startswith(RECORDING_START)
+        IS_RECORDING_END = IS_SIGNAL and message.startswith(RECORDING_END)
         
         if message is None:
             break
-        if isinstance(message, str):
-            if message.startswith("AUDIO STREAM START"):
-                just_id = shortuuid.uuid()
-                audio_stream_id = PREFIX_AUDIO_STREAM + just_id
-                redis_controller.rpush(audio_stream_id, "START")  # Push a value to indicate the end of the session
-                # thread for data transcription
-                threading.Thread(
-                    target=worker_transcribe,
-                    args=(just_id,),
-                    daemon=True
-                ).start()
-                # thread for asking ai
-                threading.Thread(
-                    target=worker_ask,
-                    args=(just_id, ws,),
-                    daemon=True
-                ).start()
-            if message.startswith("AUDIO STREAM END"):
-                # Send a signal to the task to stop processing and clean up resources
-                redis_controller.rpush(audio_stream_id, "END")  # Push a value to indicate the end of the session
-                redis_controller.setTTL(audio_stream_id, AUDIO_STREAM_EXPIRE_TIME)
+        if IS_RECORDING_START:
+            redis_controller.r_push_expire(audio_stream_id, RECORDING_START, TTL_EXPIRE_TIME)  # Push a value to indicate the end of the session
+            # thread for audio transcription
+            threading.Thread(
+                target=worker_transcribe,
+                args=(just_id,),
+                daemon=True
+            ).start()
+            # thread for asking ai
+            threading.Thread(
+                target=worker_ask,
+                args=(just_id, ws,),
+                daemon=True
+            ).start()
+            # thread for sending ai tts audio
+            threading.Thread(
+                target=worker_ai_tts,
+                args=(just_id, ws,),
+                daemon=True
+            ).start()
+            # thread for sending ai answer
+            threading.Thread(
+                target=worker_ai_answer,
+                args=(just_id, ws,),
+                daemon=True
+            ).start()
+        if IS_RECORDING_END:
+            redis_controller.r_push_expire(audio_stream_id, RECORDING_END, TTL_EXPIRE_TIME)  # Push a value to indicate the end of the session
         if isinstance(message, bytes):
-            redis_controller.rpush(audio_stream_id, message)
-            redis_controller.setTTL(audio_stream_id, AUDIO_STREAM_EXPIRE_TIME)
+            redis_controller.r_push_expire(audio_stream_id, message, TTL_EXPIRE_TIME)
 
 
 def worker_transcribe(just_id):
-    print(f"[WORKER] Started: {just_id}")
     remaining_audio = bytearray()
     segment_to_transcribe = b""
     new_segment_ready_for_transcription = False
     segment_counter = 0
-    trans_key = PREFIX_AUDIO_TRANS + just_id
+    trans_key = PREFIX_TRANSCRIPTION + just_id
+    print(f"[WORKER] Started: {trans_key}")
     
     while True:
         enough_audio_bytes_for_transcription = False
         new_segment_ready_for_transcription = False
         # Wait for a new audio chunk to be available in Redis
-        audio_stream_id = PREFIX_AUDIO_STREAM + just_id
-        _, element = redis_controller.blpop(audio_stream_id, AUDIO_STREAM_EXPIRE_TIME)
-        isEnd = element == b"END"
-        isStart = element == b"START"
-        isAudioChunk = not isEnd and not isStart and element is not None
+        audio_stream_id = PREFIX_RECORD + just_id
+        _, element = redis_controller.blpop(audio_stream_id, TTL_EXPIRE_TIME)
+        print(f"[WORKER] Received transcriptionelement: {len(element)} bytes")
+        IS_RECORDING_START = element == bytes(RECORDING_START, 'utf-8')
+        IS_RECORDING_END = element == bytes(RECORDING_END, 'utf-8')
+        isAudioChunk = not IS_RECORDING_END and not IS_RECORDING_START
          
         if element is None:
             break  # Exit the loop if no more audio chunks are available
-        
-        if isAudioChunk:
+        elif isAudioChunk:
             # print(f"[WORKER] Received audio chunk: {len(element)} bytes")
             remaining_audio.extend(element)
             is_first_segment = segment_counter == 0
@@ -115,52 +150,139 @@ def worker_transcribe(just_id):
                 del remaining_audio[:SPLITTER]
                 segment_to_transcribe = first_part + second_part
                 new_segment_ready_for_transcription = True
-        elif isEnd:
+        elif IS_RECORDING_END:
             segment_to_transcribe = remaining_audio
             remaining_audio = bytearray()
             new_segment_ready_for_transcription = True
         
         if (new_segment_ready_for_transcription):
             segment_counter += 1
-            for words in transcriptor.transcribe(segment_to_transcribe):
-                print(f"[WORKER] Transcribed segment {segment_counter} {trans_key}: {words}")
-                redis_controller.rpush(
+            for words in transcriptor.transcribe(segment_to_transcribe, VOICE_LANGUAGE):
+                redis_controller.r_push_expire(
                     trans_key, 
-                    f"{segment_counter}:" + words
+                    f"{segment_counter}:{words}",
+                    TTL_EXPIRE_TIME
                 )
-                redis_controller.setTTL(trans_key, AUDIO_STREAM_EXPIRE_TIME)
                 
-        if isEnd:
-            # segment_to_transcribe = processed_audio_bytes
-            print(f"[WORKER] Received end signal for: {audio_stream_id}")
-            redis_controller.rpush(trans_key, f"END")
-            redis_controller.setTTL(trans_key, AUDIO_STREAM_EXPIRE_TIME)
-            break  # Exit the loop if the end signal is received
-        
-        if isStart:
+        if IS_RECORDING_START:
+            redis_controller.r_push_expire(trans_key, TRANSCRIPTION_START, TTL_EXPIRE_TIME)
             print(f"[WORKER] Received start signal for: {audio_stream_id}")
             continue  # Skip processing if the start signal is received
+        
+        if IS_RECORDING_END:
+            # segment_to_transcribe = processed_audio_bytes
+            print(f"[WORKER] Received end signal for: {audio_stream_id}")
+            redis_controller.r_push_expire(trans_key, TRANSCRIPTION_END, TTL_EXPIRE_TIME)
+            break  # Exit the loop if the end signal is received
+        
 
-def worker_ask(just_id, ws):
-    trans_key = PREFIX_AUDIO_TRANS + just_id
+def worker_ask(just_id, ws): # purpose: process transcription depending on window size
+    trans_key = PREFIX_TRANSCRIPTION + just_id
+    ai_tts_key = PREFIX_AI_TTS + just_id
+    ai_text_key = PREFIX_AI_TEXT + just_id
     question = ""
     
     while True:
         # check for transcriptions
-        _, element = redis_controller.blpop(trans_key)
+        _, element = redis_controller.blpop(trans_key, TTL_EXPIRE_TIME)
+        IS_TRANSCRIPTION_START = element == bytes(TRANSCRIPTION_START, "utf-8")
+        IS_TRANSCRIPTION_END = element == bytes(TRANSCRIPTION_END, "utf-8")
         print(f"[WEBSOCKET] Transcription element: {element}")
+        
         if element is None:
             continue
-        if element == b"END":
-            ws.send("/END")
+        elif IS_TRANSCRIPTION_START:
+            ws.send(TRANSCRIPTION_START)
+        elif IS_TRANSCRIPTION_END:
+            ws.send(TRANSCRIPTION_END)
             break
         else:
             id_seg, text = element.decode('utf-8').split(":", 1)
-            question += f" {text}"
+            question += f"{text} "
             ws.send(text)
-            
-    # for sentense in ask_ai(client, CHAT_MODEL, question):
+    
+    
+    redis_controller.r_push_expire(ai_tts_key, AI_TTS_START, TTL_EXPIRE_TIME)
+    redis_controller.r_push_expire(ai_text_key, AI_TEXT_START, TTL_EXPIRE_TIME)
+    
+    for sentense in ask_ai(client, CHAT_MODEL, question):
+        redis_controller.r_push_expire(ai_tts_key, sentense, TTL_EXPIRE_TIME)
+        redis_controller.r_push_expire(ai_text_key, sentense, TTL_EXPIRE_TIME)
+        ws.send(sentense)
         
+    redis_controller.r_push_expire(ai_tts_key, AI_TTS_END, TTL_EXPIRE_TIME)
+    redis_controller.r_push_expire(ai_text_key, AI_TEXT_END, TTL_EXPIRE_TIME)
+    
+    
+def worker_ai_tts(just_id, ws): # purpose: send ai text answer to the client
+    ai_tts_key = PREFIX_AI_TTS + just_id
+    lang_path = LANGUAGE_MAP.get(VOICE_LANGUAGE)
+    config_path = LANGUAGE_MAP.get(VOICE_LANGUAGE) + ".json"
+    voice = PiperVoice.load(lang_path, config_path)
+    
+    while True:
+        _, element = redis_controller.blpop(ai_tts_key, TTL_EXPIRE_TIME)
+        IS_AI_TTS_START = element == bytes(AI_TTS_START, "utf-8")
+        IS_AI_TTS_END = element == bytes(AI_TTS_END, "utf-8")
+        
+        if element is None:
+            continue
+        elif IS_AI_TTS_START:
+            ws.send(AI_TTS_START)
+        elif IS_AI_TTS_END:
+            ws.send(AI_TTS_END)
+            break
+        else:
+            ai_respons_segment = element.decode("utf-8")
+
+            audio_bytes = b""
+
+            for chunk in voice.synthesize(ai_respons_segment):
+                audio_bytes += chunk.audio_int16_bytes
+
+            ws.send(audio_bytes)
+            
+    
+def worker_ai_answer(just_id, ws): # purpose: send ai tts audio answer to the client
+    ai_text_key = PREFIX_AI_TEXT + just_id
+    
+    while True:
+        _, element = redis_controller.blpop(ai_text_key, TTL_EXPIRE_TIME)
+        IS_AI_TEXT_START = element == bytes(AI_TEXT_START, "utf-8")
+        IS_AI_TEXT_END = element == bytes(AI_TEXT_END, "utf-8")
+        if element is None:
+            continue
+        elif IS_AI_TEXT_START:
+            ws.send(AI_TEXT_START)
+        elif IS_AI_TEXT_END:
+            ws.send(AI_TEXT_END)
+            break
+        else:
+            ws.send(element.decode('utf-8'))
+        
+def test_audio():
+    lang_path = LANGUAGE_MAP.get(VOICE_LANGUAGE)
+    config_path = LANGUAGE_MAP.get(VOICE_LANGUAGE) + ".json"
+    voice = PiperVoice.load(lang_path, config_path)
+    audio_bytes = b""
+
+    for chunk in voice.synthesize("Bonjour, je suis un assistant vocal. Comment puis-je vous aider aujourd'hui ?"):
+    # for chunk in voice.synthesize("Hi, I am a voice assistant. How can I help you today?"):
+        audio_bytes += chunk.audio_int16_bytes
+
+    # Création du WAV en mémoire
+    wav_buffer = io.BytesIO()
+
+    with wave.open(wav_buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)  # 16 bits = 2 bytes
+        wav.setframerate(voice.config.sample_rate)
+        wav.writeframes(audio_bytes)
+
+    wav_bytes = wav_buffer.getvalue()
+    with open("test.wav", "wb") as f:
+                f.write(wav_bytes)
 
 if __name__ == '__main__':
+    # test_audio()
     app.run(debug=True, host="0.0.0.0", port=5000)

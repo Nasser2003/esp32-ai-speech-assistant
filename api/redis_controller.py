@@ -7,8 +7,9 @@ class RedisController:
     def setTTL(self, key, ttl):
         self.redis_client.expire(key, ttl)
 
-    def rpush(self, key, value):
+    def r_push_expire(self, key, value, ttl):
         self.redis_client.rpush(key, value)
+        self.redis_client.expire(key, ttl)
     
     def blpop(self, key, timeout=0):
         return self.redis_client.blpop(key, timeout)

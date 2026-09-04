@@ -7,3 +7,4 @@ asyncio
 shortuuid
 faster-whisper
 numpy
+piper-tts[http]
