@@ -10,9 +10,27 @@ enum class State {
     RECORDING,      // When esp is recording audio segments, sending to the api, and display the transcription on the screen
     RECORDED,       // When esp has finished recording audio (button released)
     WAITING_AI_RESPONSE, // When esp is waiting for a response from the server
-    PLAYING_SHOWING,        // When esp is playing the audio response from the server
+    PLAY_RESPONSE,        // When esp is playing the audio response from the server
 };
 enum class RecordedState {
     SENDING_AUDIO,
     ENDING_AUDIO,
 };
+
+const char* stateToString(State state) {
+    switch (state) {
+        case State::PRE_INIT:       return "PRE_INIT";
+        case State::INIT:           return "INIT";
+        case State::CONNECTING_WIFI: return "CONNECTING_WIFI";
+        case State::CONNECTED_WIFI:  return "CONNECTED_WIFI";
+        case State::CONNECTION_FAILED:  return "CONNECTION_FAILED";
+        case State::CONNECTING_API:  return "CONNECTING_API";
+        case State::CONNECTED_API:  return "CONNECTED_API";
+        case State::IDLE:           return "IDLE";
+        case State::RECORDING:      return "RECORDING";
+        case State::RECORDED:       return "RECORDED";
+        case State::WAITING_AI_RESPONSE: return "WAITING_AI_RESPONSE";
+        case State::PLAY_RESPONSE:        return "PLAY_RESPONSE";
+        default:                    return "UNKNOWN_STATE";
+    }
+}

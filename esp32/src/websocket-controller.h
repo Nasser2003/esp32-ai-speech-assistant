@@ -6,7 +6,7 @@
 class WebsocketController
 {
 public:
-    WebsocketController(const char* host, uint16_t port, const char* path);
+    WebsocketController(const char* host, uint16_t port, const char* path, const char* RECORDING_START, const char* RECORDING_END);
 
     bool connect();
 
@@ -26,4 +26,6 @@ private:
     const char* host;
     uint16_t port;
     const char* path;
+    const char* RECORDING_START;
+    const char* RECORDING_END;
 };

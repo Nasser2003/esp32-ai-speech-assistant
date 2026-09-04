@@ -193,5 +193,5 @@ and returns text.
 ## 6. Piper TTS
 It's an open source project to transform text into voice. you can download voices for example:
 ```bash
-python3 -m piper.download_voices en_US-ryan-low fr_FR-mls_1840-low
+python3 -m piper.download_voices en_US-ryan-low fr_FR-gilles-low
 ```

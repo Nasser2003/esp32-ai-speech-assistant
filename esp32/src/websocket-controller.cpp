@@ -1,7 +1,17 @@
 #include "websocket-controller.h"
 
-WebsocketController::WebsocketController(const char* host, uint16_t port, const char* path)
-    : host(host), port(port), path(path) {}
+
+WebsocketController::WebsocketController(
+    const char* host, 
+    uint16_t port, 
+    const char* path, 
+    const char* RECORDING_START, 
+    const char* RECORDING_END)
+: host(host), 
+port(port), 
+path(path), 
+RECORDING_START(RECORDING_START), 
+RECORDING_END(RECORDING_END) {}
 
 bool WebsocketController::connect()
 {
@@ -17,12 +27,10 @@ void WebsocketController::disconnect()
 
 bool WebsocketController::startAudioSession()
 {
-    String message = "AUDIO STREAM START";
-    
     Serial.print("[WebsocketController] Starting audio session: ");
-    Serial.println(message);
+    Serial.println(RECORDING_START);
 
-    return client.send(message.c_str());
+    return client.send(RECORDING_START);
 }
 
 void WebsocketController::update()
@@ -52,10 +60,8 @@ void WebsocketController::setMessageCallback(const websockets::MessageCallback& 
 
 bool WebsocketController::endAudioSession()
 {
-    String message = "AUDIO STREAM END";
-    
     Serial.print("[WebsocketController] Ending audio session: ");
-    Serial.println(message);
+    Serial.println(RECORDING_END);
 
-    return client.send(message.c_str());
+    return client.send(RECORDING_END);
 }

@@ -9,12 +9,32 @@
 #include <WiFi.h>
 #include "websocket-controller.h"
 
+// Pins
+constexpr const int BUTTON_PIN = 2;
+constexpr const int BLUE_LED = 14;
+
+// Constants
+constexpr const char* RECORDING_START = "/RECORDING START";
+constexpr const char* RECORDING_END = "/RECORDING END";
+
+constexpr const char* TRANSCRIPTION_START = "/TRANSCRIPTION START";
+constexpr const char* TRANSCRIPTION_END = "/TRANSCRIPTION END";
+
+constexpr const char* AI_TEXT_START = "/AI TEXT START";
+constexpr const char* AI_TEXT_END = "/AI TEXT END";
+
+constexpr const char* AI_TTS_START = "/AI TTS START";
+constexpr const char* AI_TTS_END = "/AI TTS END";
+
 // Variables
 AudioPlayer audioPlayer(39, 42, 3);
 OledScreen128x32 screen(15, 7, true, 150);
 AudioRecorder recorder(18,17,40);
 SinusPulse blueLedPulse(1, 270);
-WebsocketController webSocket(API_HOST, API_PORT, API_WEBSOCKET_PATH);
+WebsocketController webSocket(API_HOST, API_PORT, 
+    API_WEBSOCKET_PATH, RECORDING_START, RECORDING_END);
+bool ai_text_finished = false;
+bool ai_tts_finished = false;
 
 // Timers
 Timer preInitTimer(10);
@@ -27,16 +47,11 @@ Timer recordStopTimer(1000);
 
 Timer updateTimer(5);
 
-// Pins
-constexpr int BUTTON_PIN = 2;
-constexpr int BLUE_LED = 14;
-
-// Constants
-
 // State machine
-State currentState = State::INIT;
+State state = State::INIT;
 State lastState = State::PRE_INIT;
-RecordedState currentRecordedState = RecordedState::SENDING_AUDIO;
+RecordedState recordedState = RecordedState::SENDING_AUDIO;
+
 
 // Function declarations
 static bool isButtonPressed();
@@ -45,7 +60,7 @@ void setWebSocketCallback();
 
 void setup()
 {
-    currentState = State::INIT;
+    state = State::INIT;
     Serial.begin(115200);
     delay(1000);
 
@@ -61,66 +76,62 @@ void setup()
 
 void loop()
 {
-    switch (currentState)
+    switch (state)
     {
     case State::INIT:
         if (preInitTimer.isElapsed() && executeOnlyOnceOnStateChange()) 
         {
-            Serial.println("[INIT] Initializing...");
             screen.displayMessage("Initializing the AI assistant...");
             initTimer.start();
             updateTimer.start();
             if (!audioPlayer.init()) {
                 Serial.println("AudioPlayer initialization failed");
             }
+            audioPlayer.startStream();
         }
         if (initTimer.isElapsed()) 
         {
-            currentState = State::CONNECTING_WIFI;
+            state = State::CONNECTING_WIFI;
         }
         break;
     case State::CONNECTING_WIFI:
         if (executeOnlyOnceOnStateChange()) 
         {
-            Serial.println("[CONNECTING_WIFI] Connecting to WiFi...");
             screen.displayMessage("Connecting to WiFi...");
             WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
             connectingTimeoutTimer.start();
         }
         if (WiFi.status() == WL_CONNECTED) 
         {
-            currentState = State::CONNECTED_WIFI;
+            state = State::CONNECTED_WIFI;
         }
         if (connectingTimeoutTimer.isElapsed()) 
         {
-            currentState = State::CONNECTION_FAILED;
+            state = State::CONNECTION_FAILED;
         }
         break;
     case State::CONNECTION_FAILED:
         if (executeOnlyOnceOnStateChange()) 
         {
-            Serial.println("[CONNECTION_FAILED] Failed to connect to WiFi.");
             screen.addMessage("\n x Failed to connect to WiFi.");
         }
         break;
     case State::CONNECTED_WIFI:
         if (executeOnlyOnceOnStateChange()) 
         {
-            Serial.println("[CONNECTED_WIFI] Connected to WiFi!");
             screen.addMessage("\n v Connected to WiFi!");
             connected_wifi.start();
         }
         if (connected_wifi.isElapsed()) 
         {
-            currentState = State::CONNECTING_API;
+            state = State::CONNECTING_API;
         }
         break;
     case State::CONNECTING_API:
         if (executeOnlyOnceOnStateChange()) 
         {
-            Serial.println("[CONNECTING_API] Connecting to API...");
             if (webSocket.connect()) {
-                currentState = State::CONNECTED_API;
+                state = State::CONNECTED_API;
                 webSocket.disconnect();
             } else {
                 screen.addMessage("\n x Problem connecting to API.");
@@ -130,25 +141,26 @@ void loop()
     case State::CONNECTED_API:
         if (executeOnlyOnceOnStateChange()) 
         {
-            Serial.println("[CONNECTED_API] Connected to API!");
             screen.addMessage("\n v Connected to API!");
             connected_wifi.start();
         }
         if (connected_wifi.isElapsed()) 
         {
-            currentState = State::IDLE;
+            state = State::IDLE;
+            screen.displayMessage("Hold the button to record min 2 sec and max 15 sec.");
         }
         break;
     case State::IDLE:
         if (executeOnlyOnceOnStateChange()) 
         {
-            Serial.println("[IDLE] Waiting for user input (button press)");
-            screen.displayMessage("Hold the button to record min 2 sec and max 15 sec.");
+            ai_text_finished = false;
+            ai_tts_finished = false;
+            audioPlayer.pushStream(nullptr, 0);
         }
 
         if (isButtonPressed()) // button pressed
         {
-            currentState = State::RECORDING;
+            state = State::RECORDING;
         }
         break;
     case State::RECORDING:
@@ -156,12 +168,10 @@ void loop()
         if (executeOnlyOnceOnStateChange()) 
         {
             if (!webSocket.connect()) {
-                currentState = State::CONNECTING_API;
+                state = State::CONNECTING_API;
             }
             audioPlayer.play("/button-press.wav");
-            Serial.println("[RECORDING] Recording audio...");
-            // screen.displayMessage("Recording audio...\n");
-            screen.displayMessage("");
+            screen.displayMessage("Recording audio...");
             recorder.startRecording();
             blueLedPulse.startPulse();
             minRecordingTimer.start();
@@ -180,11 +190,11 @@ void loop()
 
         if (!isButtonPressed() && minRecordingTimer.isElapsed())
         {
-            currentState = State::RECORDED;
+            state = State::RECORDED;
         }
         if (maxRecordingTimer.isElapsed())
         {
-            currentState = State::RECORDED;
+            state = State::RECORDED;
         }
         break;
     }
@@ -192,15 +202,13 @@ void loop()
     {
         if (executeOnlyOnceOnStateChange()) 
         {
-            currentRecordedState = RecordedState::SENDING_AUDIO;
+            recordedState = RecordedState::SENDING_AUDIO;
             audioPlayer.play("/button-release.wav");
-            Serial.println("[RECORDED] Stopping recording...");
-            // screen.displayMessage("Stopping recording...");
             recorder.stopRecording();
             blueLedPulse.stopPulse();
             recordStopTimer.start();
         } else {
-            if (currentRecordedState == RecordedState::SENDING_AUDIO) {
+            if (recordedState == RecordedState::SENDING_AUDIO) {
                 // Send one recorded segment if available
                 size_t chunkSize;
                 const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
@@ -209,7 +217,7 @@ void loop()
                     webSocket.sendAudio(segment, chunkSize);
                 } else {
                     webSocket.endAudioSession();
-                    currentRecordedState = RecordedState::ENDING_AUDIO;
+                    recordedState = RecordedState::ENDING_AUDIO;
                 }
                 // Blocked state untill websocket receives the end signal
             }
@@ -219,11 +227,18 @@ void loop()
     case State::WAITING_AI_RESPONSE:
         if (executeOnlyOnceOnStateChange())
         {
-            recorder.save("/recording.wav");
-            Serial.println("[WAITING_AI_RESPONSE] Waiting for AI response...");
-            screen.displayMessage("Waiting for AI response...");
-        
-            audioPlayer.play("/recording.wav");
+            screen.displayMessage("Waiting for AI:\n");
+        }
+        break;
+    case State::PLAY_RESPONSE:
+        if (executeOnlyOnceOnStateChange())
+        {
+            
+        }
+        if (!audioPlayer.isAudioPlaying() && audioPlayer.isStreamBufferEmpty())
+        {
+            // audioPlayer.endStream();
+            state = State::IDLE;
         }
         break;
     default:
@@ -237,16 +252,17 @@ void loop()
         ledcWrite(0, blueLedPulse.getPulseState());
         recorder.update();
         screen.update();
-        audioPlayer.loop();
+        // audioPlayer.loop();
         webSocket.update();
     }
 
 }
 
 static bool executeOnlyOnceOnStateChange() {
-    bool stateHasChanged = (currentState != lastState);
+    bool stateHasChanged = (state != lastState);
     if (stateHasChanged) {
-        lastState = currentState;
+        Serial.printf("[STATE] Change: %s -> %s\n", stateToString(lastState), stateToString(state));
+        lastState = state;
         return true;
     }
     return false;
@@ -261,16 +277,36 @@ void setWebSocketCallback() {
         websockets::WebsocketsClient& client, 
         const websockets::WebsocketsMessage& message
     ) {
-        Serial.print("[WEBSOCKET] Received message: ");
-        Serial.println(message.data());
+        bool IS_BINARY = message.isBinary();
         
-        std::string transcription = std::string(message.data().c_str());
-
-        if (transcription == "/END") {
-            currentState = State::WAITING_AI_RESPONSE;
+        
+        if (IS_BINARY) {
+            const std::string& data = message.rawData();
+            audioPlayer.pushStream(
+                reinterpret_cast<const uint8_t*>(data.data()),
+                data.size()
+            );
             return;
+        }
+
+        std::string api_message = message.data().c_str();
+        if (api_message.empty()) {
+            return;
+        } else if (api_message == TRANSCRIPTION_START) {
+            screen.displayMessage("");
+        } else if (api_message == TRANSCRIPTION_END) {
+        } else if (api_message == AI_TEXT_START || api_message == AI_TTS_START) {
+            state = State::WAITING_AI_RESPONSE;
+        } else if (api_message == AI_TEXT_END || api_message == AI_TTS_END) {
+            ai_text_finished = ai_text_finished || (api_message == AI_TEXT_END);
+            ai_tts_finished = ai_tts_finished || (api_message == AI_TTS_END);
+            if (ai_text_finished && ai_tts_finished) {
+                state = State::PLAY_RESPONSE;
+                ai_text_finished = false;
+                ai_tts_finished = false;
+            }
         } else {
-            screen.addMessage(transcription);
+            screen.addMessage(api_message);
         }
 
     });

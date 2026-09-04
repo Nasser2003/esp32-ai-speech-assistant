@@ -84,6 +84,9 @@ void OledScreen128x32::update() {
 
 		switch (animationType) {
 		case ANIMATION_TYPE::OVERRIDE:
+			if (t1Len > 20) {
+				t1Len = 20;
+			}
 			if (frame <= t1Len) {
 				showMessage(this->lastMessage.substr(0, t1Len - frame));
 			} else if (frame <= t1Len + t2Len) {
