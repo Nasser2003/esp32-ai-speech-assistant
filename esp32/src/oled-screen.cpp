@@ -21,6 +21,8 @@ OledScreen128x32::OledScreen128x32(int SDA_PIN, int SCK_PIN, bool animated, int 
 	currentMessage = "";
 	lastMessage = "";
 	textShowStartTime = 0;
+	scrollOffset = 0;
+	lastScrollTime = 0;
 }
 
 void OledScreen128x32::init() {
@@ -37,15 +39,24 @@ void OledScreen128x32::init() {
 }
 
 void OledScreen128x32::displayMessage(std::string message) {
+	// Serial.print("[OLED ORDER] Setting message: ");
+	// Serial.println(message.c_str());
 	this->lastMessage = this->currentMessage;
 	this->currentMessage = message;
 	this->textShowStartTime = millis(); // to sync the animation timer with the new message
+	this->textShowEndTime = 0;
 }
 
 void OledScreen128x32::addMessage(std::string message) {
+	// Serial.print("[OLED ORDER] Setting message: ");
+	// Serial.println(message.c_str());
+	uint32_t last_display_duration = this->textShowEndTime - this->textShowStartTime;
+	this->textShowStartTime = millis();
+	this->textShowEndTime = millis() + last_display_duration;
 	this->lastMessage = this->currentMessage;
 	this->currentMessage = this->currentMessage + message;
-	this->textShowStartTime = millis(); // to sync the animation timer with the new message
+	// to sync the animation timer with the new message
+	// this->textShowStartTime = millis() + (textShowEndTime - textShowStartTime);
 }
 
 void OledScreen128x32::update() {
@@ -53,6 +64,7 @@ void OledScreen128x32::update() {
 	if (sameMessage) {
 		return;
 	}
+
 	if (!this->animated) {
 		showMessage(this->currentMessage);
 		return;
@@ -79,6 +91,7 @@ void OledScreen128x32::update() {
 			} else {
 				this->lastMessage = this->currentMessage; // to avoid re-displaying the same message in the next update
 				showMessage(this->currentMessage);
+				textShowEndTime = millis();
 			}
 			break;
 		case ANIMATION_TYPE::COMPLETION:
@@ -87,17 +100,104 @@ void OledScreen128x32::update() {
 			} else {
 				this->lastMessage = this->currentMessage; // to avoid re-displaying the same message in the next update
 				showMessage(this->currentMessage);
+				textShowEndTime = millis();
 			}
 			break;
 		}
 	}
 }
 
-void OledScreen128x32::showMessage(std::string message) {
+void OledScreen128x32::showMessage(const std::string& message) {
+	std::string normalized = normalizeText(message);
+	// If the screen has to show more than 4 lines, it will scroll the text up to show the last 4 lines
+	bool sameMessage = normalized == this->currentDisplayedMessage;
+	if (sameMessage) {
+		return;
+	}
+	lastDisplayedMessage = currentDisplayedMessage;
+	currentDisplayedMessage = normalized;
+	
 	display.clearDisplay();
 	display.setCursor(0, 0);
-	display.print(message.c_str());
+	display.print(normalized.c_str());
+	int16_t finalY = display.getCursorY();
+	int totalLines = (finalY / 8) + 1;
+	const int maxLines = 4;
+
+	if (totalLines > maxLines) {
+        scrollOffset = (totalLines - maxLines) * 8;
+    } else {
+        scrollOffset = 0;
+    }
+    display.clearDisplay();
+    display.setCursor(0, -scrollOffset);
+    display.print(normalized.c_str());
+
 	display.display();
+}
+
+std::string OledScreen128x32::normalizeText(const std::string& text) {
+    std::string result;
+
+    for (size_t i = 0; i < text.length(); i++) {
+        unsigned char c = text[i];
+
+        // ASCII
+        if (c < 128) {
+            result += c;
+            continue;
+        }
+
+        // UTF-8 : caractères accentués français
+        if (c == 0xC3 && i + 1 < text.length()) {
+            unsigned char next = text[++i];
+
+            switch (next) {
+                case 0xA0: // à
+                case 0xA2: // â
+                case 0xA4: // ä
+                    result += 'a';
+                    break;
+
+                case 0xA7: // ç
+                    result += 'c';
+                    break;
+
+                case 0xA8: // è
+                case 0xA9: // é
+                case 0xAA: // ê
+                case 0xAB: // ë
+                    result += 'e';
+                    break;
+
+                case 0xAE: // î
+                case 0xAF: // ï
+                    result += 'i';
+                    break;
+
+                case 0xB4: // ô
+                case 0xB6: // ö
+                    result += 'o';
+                    break;
+
+                case 0xB9: // ù
+                case 0xBB: // û
+                case 0xBC: // ü
+                    result += 'u';
+                    break;
+
+                case 0xBF: // ÿ
+                    result += 'y';
+                    break;
+
+                default:
+                    result += '?';
+                    break;
+            }
+        }
+    }
+
+    return result;
 }
 
 // EXAMPLE

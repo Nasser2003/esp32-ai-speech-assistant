@@ -12,7 +12,14 @@ private:
     bool animated;
     int speed;
     std::string currentMessage = "";
-    std::string lastMessage = "";
+    std::string lastMessage = "null"; // last message that was set, used to detect changes
+    std::string currentDisplayedMessage = ""; // physically displayed message on the screen
+    std::string lastDisplayedMessage = "null"; // physically displayed message on the screen
     uint32_t textShowStartTime = 0;
-    void showMessage(std::string message);
+    uint32_t textShowEndTime = 0;
+
+    int scrollOffset;
+    uint32_t lastScrollTime;
+    void showMessage(const std::string& message);
+    std::string normalizeText(const std::string& text);
 };

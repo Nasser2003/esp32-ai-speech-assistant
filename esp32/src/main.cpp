@@ -7,23 +7,25 @@
 #include "state.h"
 #include "credentials.h"
 #include <WiFi.h>
-
+#include "websocket-controller.h"
 
 // Variables
 AudioPlayer audioPlayer(39, 42, 3);
 OledScreen128x32 screen(15, 7, true, 150);
 AudioRecorder recorder(18,17,40);
 SinusPulse blueLedPulse(1, 270);
+WebsocketController webSocket(API_HOST, API_PORT, API_WEBSOCKET_PATH);
 
 // Timers
 Timer preInitTimer(10);
 Timer initTimer(2000);
+Timer connectingTimeoutTimer(3000);
 Timer connected_wifi(1000);
 Timer minRecordingTimer(2000);
 Timer maxRecordingTimer(15000);
 Timer recordStopTimer(1000);
 
-Timer updateTimer(2);
+Timer updateTimer(5);
 
 // Pins
 constexpr int BUTTON_PIN = 2;
@@ -34,11 +36,12 @@ constexpr int BLUE_LED = 14;
 // State machine
 State currentState = State::INIT;
 State lastState = State::PRE_INIT;
-RecordingState currentRecordingState = RecordingState::INIT;
+RecordedState currentRecordedState = RecordedState::SENDING_AUDIO;
 
 // Function declarations
 static bool isButtonPressed();
 static bool executeOnlyOnceOnStateChange();
+void setWebSocketCallback();
 
 void setup()
 {
@@ -51,8 +54,9 @@ void setup()
     ledcAttachPin(BLUE_LED, 0); // PWM way to setup pinMode
     screen.init();
     preInitTimer.start();
-    WiFi.setTxPower(WIFI_POWER_8_5dBm); // Set the WiFi transmission power to 8.5 dBm to avoid the brownout effect
+    // WiFi.setTxPower(WIFI_POWER_8_5dBm); // Set the WiFi transmission power to 8.5 dBm to avoid the brownout effect
     audioPlayer.setVolume(10);
+    setWebSocketCallback();
 }
 
 void loop()
@@ -81,17 +85,53 @@ void loop()
             Serial.println("[CONNECTING_WIFI] Connecting to WiFi...");
             screen.displayMessage("Connecting to WiFi...");
             WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            connectingTimeoutTimer.start();
         }
         if (WiFi.status() == WL_CONNECTED) 
         {
             currentState = State::CONNECTED_WIFI;
+        }
+        if (connectingTimeoutTimer.isElapsed()) 
+        {
+            currentState = State::CONNECTION_FAILED;
+        }
+        break;
+    case State::CONNECTION_FAILED:
+        if (executeOnlyOnceOnStateChange()) 
+        {
+            Serial.println("[CONNECTION_FAILED] Failed to connect to WiFi.");
+            screen.addMessage("\n x Failed to connect to WiFi.");
         }
         break;
     case State::CONNECTED_WIFI:
         if (executeOnlyOnceOnStateChange()) 
         {
             Serial.println("[CONNECTED_WIFI] Connected to WiFi!");
-            screen.addMessage("\nConnected to WiFi!");
+            screen.addMessage("\n v Connected to WiFi!");
+            connected_wifi.start();
+        }
+        if (connected_wifi.isElapsed()) 
+        {
+            currentState = State::CONNECTING_API;
+        }
+        break;
+    case State::CONNECTING_API:
+        if (executeOnlyOnceOnStateChange()) 
+        {
+            Serial.println("[CONNECTING_API] Connecting to API...");
+            if (webSocket.connect()) {
+                currentState = State::CONNECTED_API;
+                webSocket.disconnect();
+            } else {
+                screen.addMessage("\n x Problem connecting to API.");
+            }
+        }
+        break;
+    case State::CONNECTED_API:
+        if (executeOnlyOnceOnStateChange()) 
+        {
+            Serial.println("[CONNECTED_API] Connected to API!");
+            screen.addMessage("\n v Connected to API!");
             connected_wifi.start();
         }
         if (connected_wifi.isElapsed()) 
@@ -115,25 +155,28 @@ void loop()
     {
         if (executeOnlyOnceOnStateChange()) 
         {
-            currentRecordingState = RecordingState::INIT;
+            if (!webSocket.connect()) {
+                currentState = State::CONNECTING_API;
+            }
             audioPlayer.play("/button-press.wav");
             Serial.println("[RECORDING] Recording audio...");
-            screen.displayMessage("Recording audio...");
+            // screen.displayMessage("Recording audio...\n");
+            screen.displayMessage("");
             recorder.startRecording();
             blueLedPulse.startPulse();
             minRecordingTimer.start();
             maxRecordingTimer.start();
+
+            webSocket.startAudioSession();
         } else {
             // Send one recorded segment if available
             size_t chunkSize;
             const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
-            Serial.printf("[RECORDING] Fetched recorded segment: %u bytes\n", static_cast<unsigned>(chunkSize));
     
-            // if (segment != nullptr) {
-            //     webSocket.sendBIN(segment, segmentSize);
-            // }
+            if (segment != nullptr) {
+                webSocket.sendAudio(segment, chunkSize);
+            }
         }
-
 
         if (!isButtonPressed() && minRecordingTimer.isElapsed())
         {
@@ -149,16 +192,27 @@ void loop()
     {
         if (executeOnlyOnceOnStateChange()) 
         {
+            currentRecordedState = RecordedState::SENDING_AUDIO;
             audioPlayer.play("/button-release.wav");
             Serial.println("[RECORDED] Stopping recording...");
-            screen.displayMessage("Stopping recording...");
+            // screen.displayMessage("Stopping recording...");
             recorder.stopRecording();
             blueLedPulse.stopPulse();
             recordStopTimer.start();
-        }
-        if (recordStopTimer.isElapsed())
-        {
-            currentState = State::WAITING_AI_RESPONSE;
+        } else {
+            if (currentRecordedState == RecordedState::SENDING_AUDIO) {
+                // Send one recorded segment if available
+                size_t chunkSize;
+                const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
+        
+                if (segment != nullptr) {
+                    webSocket.sendAudio(segment, chunkSize);
+                } else {
+                    webSocket.endAudioSession();
+                    currentRecordedState = RecordedState::ENDING_AUDIO;
+                }
+                // Blocked state untill websocket receives the end signal
+            }
         }
         break;
     }
@@ -177,31 +231,16 @@ void loop()
     }
 
     // Update variables
-    if (true || updateTimer.isElapsed()) {
+    if (false || updateTimer.isElapsed()) { // I put true to skip the time for now 
         updateTimer.start();
 
         ledcWrite(0, blueLedPulse.getPulseState());
         recorder.update();
         screen.update();
         audioPlayer.loop();
+        webSocket.update();
     }
-    
 
-    // if (buttonReleased && recorder.isRecordingState()) {
-    //     recorder.stopRecording();
-    //     recorder.save("/recording.wav");
-    //     audioPlayer.setVolume(100);
-
-    //     if (!audioPlayer.play("/recording.wav")) {
-    //         Serial.println("Playback failed");
-    //     }
-
-    //     Serial.println("Recording saved");
-    //     delay(50);
-    // }
-
-    // // Process audio while recording
-    // recorder.update();
 }
 
 static bool executeOnlyOnceOnStateChange() {
@@ -215,4 +254,24 @@ static bool executeOnlyOnceOnStateChange() {
 
 static bool isButtonPressed() {
     return digitalRead(BUTTON_PIN) == LOW;
+}
+
+void setWebSocketCallback() {
+    webSocket.setMessageCallback([](
+        websockets::WebsocketsClient& client, 
+        const websockets::WebsocketsMessage& message
+    ) {
+        Serial.print("[WEBSOCKET] Received message: ");
+        Serial.println(message.data());
+        
+        std::string transcription = std::string(message.data().c_str());
+
+        if (transcription == "/END") {
+            currentState = State::WAITING_AI_RESPONSE;
+            return;
+        } else {
+            screen.addMessage(transcription);
+        }
+
+    });
 }
