@@ -2,7 +2,7 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Ouvrir Terminal API",
+            "label": "Open API Terminal",
             "type": "shell",
             "command": "cd \"${workspaceFolder}/api\" && exec bash --init-file <(echo \"source ~/.bashrc; source .venv/bin/activate\")",
             "presentation": {

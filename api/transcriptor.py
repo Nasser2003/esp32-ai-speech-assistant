@@ -8,12 +8,20 @@ class Transcriptor:
     def transcribe(self, audio: bytes, language: str):
         audio = self._convert_binary_to_np(audio)
         
-        segments, _ = self.model.transcribe(audio, language=language)
+        segments, info = self.model.transcribe(audio, language=language)
         for segment in segments:
             text = segment.text.strip()
+            # filter some segments
             if not text:
                 continue
-            yield text
+            duration = segment.end - segment.start
+
+            if duration < 0.3:
+                continue
+
+            if segment.no_speech_prob > 0.6:
+                continue
+            yield text, info.language
              
     @staticmethod
     def _convert_binary_to_np(data) -> np.float32:
