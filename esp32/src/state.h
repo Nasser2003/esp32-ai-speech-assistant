@@ -11,6 +11,7 @@ enum class State {
     RECORDED,       // When esp has finished recording audio (button released)
     WAITING_AI_RESPONSE, // When esp is waiting for a response from the server
     PLAY_RESPONSE,        // When esp is playing the audio response from the server
+    ERROR,          // When esp encounters an error
 };
 enum class RecordedState {
     SENDING_AUDIO,
@@ -31,6 +32,7 @@ const char* stateToString(State state) {
         case State::RECORDED:       return "RECORDED";
         case State::WAITING_AI_RESPONSE: return "WAITING_AI_RESPONSE";
         case State::PLAY_RESPONSE:        return "PLAY_RESPONSE";
+        case State::ERROR:          return "ERROR";
         default:                    return "UNKNOWN_STATE";
     }
 }

@@ -26,24 +26,28 @@ constexpr const char* AI_TEXT_END = "/AI TEXT END";
 constexpr const char* AI_TTS_START = "/AI TTS START";
 constexpr const char* AI_TTS_END = "/AI TTS END";
 
+constexpr const char* WEBSOCKET_CLOSE = "/WEBSOCKET CLOSE";
+
 // Variables
 AudioPlayer audioPlayer(39, 42, 3);
 OledScreen128x32 screen(15, 7, true, 150);
 AudioRecorder recorder(18,17,40);
 SinusPulse blueLedPulse(1, 270);
 WebsocketController webSocket(API_HOST, API_PORT, 
-    API_WEBSOCKET_PATH, RECORDING_START, RECORDING_END);
+    API_WEBSOCKET_PATH, RECORDING_START, 
+    RECORDING_END, WEBSOCKET_CLOSE);
 bool ai_text_finished = false;
 bool ai_tts_finished = false;
 
 // Timers
 Timer preInitTimer(10);
 Timer initTimer(2000);
-Timer connectingTimeoutTimer(3000);
-Timer connected_wifi(1000);
+Timer connectingTimeoutTimer(1000);
+Timer connected_wifi(1);
 Timer minRecordingTimer(2000);
 Timer maxRecordingTimer(15000);
 Timer recordStopTimer(1000);
+Timer errorTimer(2000);
 
 Timer updateTimer(5);
 
@@ -70,7 +74,7 @@ void setup()
     screen.init();
     preInitTimer.start();
     // WiFi.setTxPower(WIFI_POWER_8_5dBm); // Set the WiFi transmission power to 8.5 dBm to avoid the brownout effect
-    audioPlayer.setVolume(10);
+    audioPlayer.setVolume(15);
     setWebSocketCallback();
 }
 
@@ -114,6 +118,11 @@ void loop()
         if (executeOnlyOnceOnStateChange()) 
         {
             screen.addMessage("\n x Failed to connect to WiFi.");
+            errorTimer.start();
+        }
+        if (errorTimer.isElapsed()) 
+        {
+            state = State::ERROR;
         }
         break;
     case State::CONNECTED_WIFI:
@@ -134,8 +143,13 @@ void loop()
                 state = State::CONNECTED_API;
                 webSocket.disconnect();
             } else {
+                errorTimer.start();
                 screen.addMessage("\n x Problem connecting to API.");
             }
+        }
+        else if (errorTimer.isElapsed()) 
+        {
+            state = State::ERROR;
         }
         break;
     case State::CONNECTED_API:
@@ -227,7 +241,7 @@ void loop()
     case State::WAITING_AI_RESPONSE:
         if (executeOnlyOnceOnStateChange())
         {
-            screen.displayMessage("Waiting for AI:\n");
+            screen.addMessage("\n[SYS] Waiting for AI\n");
         }
         break;
     case State::PLAY_RESPONSE:
@@ -239,8 +253,17 @@ void loop()
         {
             // audioPlayer.endStream();
             state = State::IDLE;
+            webSocket.disconnect();
         }
         break;
+    case State::ERROR:
+        if (executeOnlyOnceOnStateChange())
+        {
+            screen.displayMessage("[SYS] Error occurred. Press the button to reset.");
+        }
+        if (isButtonPressed()) {
+            state = State::CONNECTING_WIFI;
+        }
     default:
         break;
     }
@@ -256,6 +279,7 @@ void loop()
         webSocket.update();
     }
 
+    vTaskDelay(1); // Yield to other tasks
 }
 
 static bool executeOnlyOnceOnStateChange() {
@@ -304,6 +328,7 @@ void setWebSocketCallback() {
                 state = State::PLAY_RESPONSE;
                 ai_text_finished = false;
                 ai_tts_finished = false;
+                webSocket.sendAudio(nullptr, 0); // send empty data to signal the end of the stream
             }
         } else {
             screen.addMessage(api_message);

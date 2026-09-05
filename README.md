@@ -8,10 +8,11 @@ In this document, I will describe each step of developping this project in order
 - Learn C++ and make modular code
 - Create web sockets on ESP
 - Stream full-duplex audio and text information between ESP32 and API
-- How to use redis database to store in memory data like sessions and audio
-- How to use caching with Flask
-- How to create async tasks with asyncio
-- How to transcribe audio using Whisper from OpenAi
+- Use redis database to store in memory data like sessions and audio
+- Use caching with Flask
+- Create async tasks with asyncio
+- Transcribe audio using Whisper from OpenAi
+- Convert text into Speech with Piper
 
 ## 1. ESP32
 ### PlatformIO
@@ -43,8 +44,9 @@ ollama run llama3.2
 ```
 This model is pretty fast on the code i5 CPU 
 
-## 3. Flask API
-Flask API is a strong python library to build reliable APIs, 
+## 3. Fast API
+### Flask
+Flask API is a quick python library to build APIs very fast, 
 and can be integrated with others tools easily.
 
 ### Create a python environment

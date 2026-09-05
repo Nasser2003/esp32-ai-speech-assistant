@@ -6,12 +6,15 @@ WebsocketController::WebsocketController(
     uint16_t port, 
     const char* path, 
     const char* RECORDING_START, 
-    const char* RECORDING_END)
+    const char* RECORDING_END,
+    const char* WEBSOCKET_CLOSE
+)
 : host(host), 
 port(port), 
 path(path), 
 RECORDING_START(RECORDING_START), 
-RECORDING_END(RECORDING_END) {}
+RECORDING_END(RECORDING_END),
+WEBSOCKET_CLOSE(WEBSOCKET_CLOSE) {}
 
 bool WebsocketController::connect()
 {
@@ -22,6 +25,7 @@ bool WebsocketController::connect()
 void WebsocketController::disconnect()
 {
     // Disconnect from the WebSocket server.
+    client.send(WEBSOCKET_CLOSE);
     client.close();
 }
 
