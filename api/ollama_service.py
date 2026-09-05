@@ -1,4 +1,4 @@
-def generate(client, model, question):
+def ask_ai(client, model, question):
 
     response = client.chat(
         model=model,
@@ -15,8 +15,8 @@ def generate(client, model, question):
 
         if text:
             sentence += text
-            if text.endswith(('.', '!', '?', ',', ';', ':')):
-                print(sentence, end='', flush=True)
+            if text.strip().endswith(('.', '!', '?', ',', ';', ':')) and len(sentence) > 10:
                 yield sentence
                 sentence = ""
-    yield "\n"
+    yield f"{sentence}\n"
+    
