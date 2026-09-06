@@ -29,3 +29,6 @@ LANGUAGE_MAP = {
     "fr": ["data/fr_FR-upmc-medium.onnx", 22_050],
     "ru": ["data/ru_RU-ruslan-medium.onnx", 22_050],
 }
+
+REDIS_PORT = 6379
+API_PORT = 5000
