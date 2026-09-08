@@ -12,6 +12,22 @@
 // Pins
 constexpr const int BUTTON_PIN = 2;
 constexpr const int BLUE_LED = 14;
+struct SPEAKER_PINS {
+    static constexpr int D_OUT_PIN = 39;
+    static constexpr int BCLK_PIN = 42;
+    static constexpr int LRC_PIN = 3;
+};
+struct SCREEN_PINS {
+    static constexpr int SDA = 15;
+    static constexpr int SCK = 7;
+};
+struct MIC_PINS {
+    static constexpr int SCK_PIN = 18;
+    static constexpr int WS_PIN = 17;
+    static constexpr int SD_PIN = 40;
+};
+
+
 
 // Constants
 constexpr const char* RECORDING_START = "/RECORDING START";
@@ -29,9 +45,9 @@ constexpr const char* AI_TTS_END = "/AI TTS END";
 constexpr const char* WEBSOCKET_CLOSE = "/WEBSOCKET CLOSE";
 
 // Variables
-AudioPlayer audioPlayer(39, 42, 3);
-OledScreen128x32 screen(15, 7, true, 150);
-AudioRecorder recorder(18,17,40);
+AudioPlayer audioPlayer(SPEAKER_PINS::D_OUT_PIN, SPEAKER_PINS::BCLK_PIN, SPEAKER_PINS::LRC_PIN);
+OledScreen128x32 screen(SCREEN_PINS::SDA, SCREEN_PINS::SCK, true, 150);
+AudioRecorder recorder(MIC_PINS::SCK_PIN, MIC_PINS::WS_PIN, MIC_PINS::SD_PIN);
 SinusPulse blueLedPulse(1, 270);
 WebsocketController webSocket(API_HOST, API_PORT, 
     API_WEBSOCKET_PATH, RECORDING_START, 
