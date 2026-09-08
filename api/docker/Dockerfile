@@ -5,7 +5,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # 1. Copy configuration files first (Optimizes Docker layer caching)
-COPY pyproject.toml uv.lock .env ./
+COPY pyproject.toml uv.lock ./
 
 # Install uv and install Python dependencies globally in the container
 RUN pip install --no-cache-dir uv

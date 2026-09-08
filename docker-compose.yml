@@ -9,10 +9,23 @@ services:
       dockerfile: docker/Dockerfile
     volumes:
       - ./api:/app
+      - ./api:/app
     command: uv run uvicorn src.main:app --host 0.0.0.0 --port 5000 --reload
     networks:
       - esp-ai-network
+    depends_on:
+      - postgres
+      - redis 
+    env_file:
+      - .env
 
+
+# Define external network for communication between containers
 networks:
   esp-ai-network:
     external: true
+
+# Create storage containers for Postgres and Redis data
+volumes:
+  postgres_data:
+  redis_data:
