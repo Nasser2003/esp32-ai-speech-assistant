@@ -1,0 +1,24 @@
+[project]
+name = "api"
+version = "0.1.0"
+description = "ESP32 AI Speech Assistant API"
+requires-python = ">=3.10"
+dependencies = [
+    "asyncio>=4.0.0",
+    "dotenv-linter>=0.9.0",
+    "fastapi>=0.141.1",
+    "faster-whisper>=1.2.1",
+    "numpy>=2.2.6",
+    "ollama>=0.6.2",
+    "piper-tts[http]>=1.8.0",
+    "pydantic>=2.13.5",
+    "python-dotenv>=1.2.3",
+    "redis>=8.1.0",
+    "scipy>=1.15.3",
+    "shortuuid>=1.0.13",
+    "simple-websocket>=1.1.0",
+    "uvicorn>=0.52.4",
+]
+
+[tool.uv]
+package = false

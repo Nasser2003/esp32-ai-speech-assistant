@@ -1,34 +1,47 @@
-# constants
-url = "127.0.0.1:11434/api/chat"
-TTL_EXPIRE_TIME = 120  # 5 min sec
-TRANSCRIPTION_CHUNK_SIZE = 64_000 # 2 seconds of audio at 16kHz, 16-bit PCM
-TRANSCRIPTION_WINDOW_SIZE = 32_000 # clide every 1 second of audio
-TRANS_MODEL = "small"
-CHAT_MODEL = "llama3.2"
+import os
+from dotenv import load_dotenv
 
-# constant strings
-PREFIX_LANGUAGE = "audio_language:" # recorded audio
-PREFIX_RECORD = "audio_record:" # recorded audio
-PREFIX_TRANSCRIPTION = "audio_trans:" # transcription
-PREFIX_AI_TEXT = "ai_text:" # ai text response
-PREFIX_AI_TTS = "ai_tts:" # ai audio response
 
-RECORDING_START = "/RECORDING START" # start recording audio stream
-RECORDING_END = "/RECORDING END"
-TRANSCRIPTION_START = "/TRANSCRIPTION START" # start transcription of the audio stream
-TRANSCRIPTION_END = "/TRANSCRIPTION END"
-AI_TEXT_START = "/AI TEXT START" # start sending ai textual answer to the client
-AI_TEXT_END = "/AI TEXT END"
-AI_TTS_START = "/AI TTS START" # start sending ai audio answer to the client
-AI_TTS_END = "/AI TTS END"
-WEBSOCKET_CLOSE = "/WEBSOCKET CLOSE"
+load_dotenv()
 
-VOICE_LANGUAGE = "auto" # "en" or "fr" or "auto"
+
+OLLAMA_URL = os.getenv("OLLAMA_URL")
+OLLAMA_CHAT_PATH = os.getenv("OLLAMA_CHAT_PATH")
+
+TTL_EXPIRE_TIME = int(os.getenv("TTL_EXPIRE_TIME"))
+TRANSCRIPTION_CHUNK_SIZE = int(os.getenv("TRANSCRIPTION_CHUNK_SIZE"))
+TRANSCRIPTION_WINDOW_SIZE = int(os.getenv("TRANSCRIPTION_WINDOW_SIZE"))
+
+TRANS_MODEL = os.getenv("TRANS_MODEL")
+CHAT_MODEL = os.getenv("CHAT_MODEL")
+
+REDIS_PORT = int(os.getenv("REDIS_PORT"))
+API_PORT = int(os.getenv("API_PORT"))
+
+
+VOICE_LANGUAGE = os.getenv("VOICE_LANGUAGE")
 LANGUAGE_MAP = {
     "en": ["data/en_US-ryan-low.onnx", 16_000],
     "fr": ["data/fr_FR-upmc-medium.onnx", 22_050],
     "ru": ["data/ru_RU-ruslan-medium.onnx", 22_050],
 }
 
-REDIS_PORT = 6379
-API_PORT = 5000
+PREFIX_LANGUAGE = os.getenv("PREFIX_LANGUAGE")
+PREFIX_RECORD = os.getenv("PREFIX_RECORD")
+PREFIX_TRANSCRIPTION = os.getenv("PREFIX_TRANSCRIPTION")
+PREFIX_AI_TEXT = os.getenv("PREFIX_AI_TEXT")
+PREFIX_AI_TTS = os.getenv("PREFIX_AI_TTS")
+
+RECORDING_START = os.getenv("RECORDING_START")
+RECORDING_END = os.getenv("RECORDING_END")
+
+TRANSCRIPTION_START = os.getenv("TRANSCRIPTION_START")
+TRANSCRIPTION_END = os.getenv("TRANSCRIPTION_END")
+
+AI_TEXT_START = os.getenv("AI_TEXT_START")
+AI_TEXT_END = os.getenv("AI_TEXT_END")
+
+AI_TTS_START = os.getenv("AI_TTS_START")
+AI_TTS_END = os.getenv("AI_TTS_END")
+
+WEBSOCKET_CLOSE = os.getenv("WEBSOCKET_CLOSE")

@@ -1,5 +1,12 @@
 {
-    "python.defaultInterpreterPath": "/home/main/dev/esp32-ai-speech-assistant/api/.venv/bin/python",
+    "python.defaultInterpreterPath": "/home/main/dev/esp32-ai-assistant/api/.venv/bin/python",
     "python.terminal.activateEnvironment": true,
-    "terminal.integrated.cwd": "/home/main/dev/esp32-ai-speech-assistant/api",
+    "terminal.integrated.cwd": "/home/main/dev/esp32-ai-assistant/api",
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:venv",
+            "packageManager": "ms-python.python:pip"
+        }
+    ],
 }
