@@ -1,14 +1,43 @@
-from src.config import (PREFIX_TRANSCRIPTION, TRANSCRIPTION_START, TRANSCRIPTION_END, 
-    TTL_EXPIRE_TIME, PREFIX_RECORD, RECORDING_START, RECORDING_END, TRANSCRIPTION_CHUNK_SIZE, #
-    TRANSCRIPTION_WINDOW_SIZE, VOICE_LANGUAGE, PREFIX_LANGUAGE)
+from api.src.services.redis_controller import RedisController
+from src.services.transcriptor import Transcriptor
+from src.config import (REDIS_PREFIX_TRANSCRIPTION, TRANSCRIPTION_START, TRANSCRIPTION_END, 
+    TTL_EXPIRE_TIME, REDIS_PREFIX_RECORD, RECORDING_START, RECORDING_END, TRANSCRIPTION_CHUNK_SIZE, #
+    TRANSCRIPTION_WINDOW_SIZE, VOICE_LANGUAGE, REDIS_PREFIX_LANGUAGE)
+import asyncio
 
-async def worker_transcribe(just_id, redis_controller, transcriptor): 
+_ASYNC_GENERATOR_END = object() # Object used to signal the end of the async generator
+
+# Purpose: wrap sync blocking `transcriptor.transcribe` generator into an async generator to avoid blocking the event loop
+async def async_generator_wrapper(sync_gen_func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    out_queue: asyncio.Queue = asyncio.Queue()
+
+    def runner():
+        try:
+            for item in sync_gen_func(*args, **kwargs):
+                loop.call_soon_threadsafe(out_queue.put_nowait, item)
+        except Exception as e:
+            loop.call_soon_threadsafe(out_queue.put_nowait, e)
+        finally:
+            loop.call_soon_threadsafe(out_queue.put_nowait, _ASYNC_GENERATOR_END)
+
+    loop.run_in_executor(None, runner)
+
+    while True:
+        item = await out_queue.get()
+        if item is _ASYNC_GENERATOR_END:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+async def worker_transcribe(just_id, redis_controller : RedisController, transcriptor: Transcriptor): # purpose: process audio chunks and transcribe them into text
     remaining_audio = bytearray()
     segment_to_transcribe = b""
     new_segment_ready_for_transcription = False
     segment_counter = 0
-    trans_key = PREFIX_TRANSCRIPTION + just_id
-    lang_key = PREFIX_LANGUAGE + just_id
+    trans_key = REDIS_PREFIX_TRANSCRIPTION + just_id
+    lang_key = REDIS_PREFIX_LANGUAGE + just_id
     print(f"[WORKER] Started: {trans_key}")
     
     temp_wav = b""
@@ -17,8 +46,8 @@ async def worker_transcribe(just_id, redis_controller, transcriptor):
         enough_audio_bytes_for_transcription = False
         new_segment_ready_for_transcription = False
         # Wait for a new audio chunk to be available in Redis
-        audio_stream_id = PREFIX_RECORD + just_id
-        _, element = redis_controller.blpop(audio_stream_id, TTL_EXPIRE_TIME)
+        audio_stream_id = REDIS_PREFIX_RECORD + just_id
+        _, element = await redis_controller.blpop(audio_stream_id, TTL_EXPIRE_TIME)
         print(f"[WORKER] Received transcription element: {len(element)} bytes")
         IS_RECORDING_START = element == bytes(RECORDING_START, 'utf-8')
         IS_RECORDING_END = element == bytes(RECORDING_END, 'utf-8')
@@ -56,25 +85,29 @@ async def worker_transcribe(just_id, redis_controller, transcriptor):
             lang = VOICE_LANGUAGE
             if lang == "auto":
                 lang = None
-            for words, lang in transcriptor.transcribe(segment_to_transcribe, lang):
-                redis_controller.r_push_expire(
+                
+            # --- seul changement : boucle sync remplacée par le wrapper async ---
+            async for words, lang in async_generator_wrapper(
+                transcriptor.transcribe, segment_to_transcribe, lang
+            ):
+                await redis_controller.r_push_expire(
                     lang_key, 
                     lang, 
                     TTL_EXPIRE_TIME
                 )
-                redis_controller.r_push_expire(
+                await redis_controller.r_push_expire(
                     trans_key, 
-                    f"{segment_counter}:{words}",
+                    f"{segment_counter}:{words}", 
                     TTL_EXPIRE_TIME
                 )
                 
         if IS_RECORDING_START:
-            redis_controller.r_push_expire(trans_key, TRANSCRIPTION_START, TTL_EXPIRE_TIME)
+            await redis_controller.r_push_expire(trans_key, TRANSCRIPTION_START, TTL_EXPIRE_TIME)
             print(f"[WORKER] Received start signal for: {audio_stream_id}")
             continue  # Skip processing if the start signal is received
         
         if IS_RECORDING_END:
             # segment_to_transcribe = processed_audio_bytes
             print(f"[WORKER] Received end signal for: {audio_stream_id}")
-            redis_controller.r_push_expire(trans_key, TRANSCRIPTION_END, TTL_EXPIRE_TIME)
+            await redis_controller.r_push_expire(trans_key, TRANSCRIPTION_END, TTL_EXPIRE_TIME)
             break  # Exit the loop if the end signal is received

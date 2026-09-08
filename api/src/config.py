@@ -1,8 +1,13 @@
 import os
 from dotenv import load_dotenv
 
-
-load_dotenv()
+# This line is not necesary because podman compose is injecting itself the 
+#   variables into the container thanks to this part in docker-compose.yml:
+# service: 
+#   api:
+#     env_file:
+#       - .env
+# load_dotenv() 
 
 
 OLLAMA_URL = os.getenv("OLLAMA_URL")
@@ -26,11 +31,11 @@ LANGUAGE_MAP = {
     "ru": ["data/ru_RU-ruslan-medium.onnx", 22_050],
 }
 
-PREFIX_LANGUAGE = os.getenv("PREFIX_LANGUAGE")
-PREFIX_RECORD = os.getenv("PREFIX_RECORD")
-PREFIX_TRANSCRIPTION = os.getenv("PREFIX_TRANSCRIPTION")
-PREFIX_AI_TEXT = os.getenv("PREFIX_AI_TEXT")
-PREFIX_AI_TTS = os.getenv("PREFIX_AI_TTS")
+REDIS_PREFIX_LANGUAGE = os.getenv("REDIS_PREFIX_LANGUAGE")
+REDIS_PREFIX_RECORD = os.getenv("REDIS_PREFIX_RECORD")
+REDIS_PREFIX_TRANSCRIPTION = os.getenv("REDIS_PREFIX_TRANSCRIPTION")
+REDIS_PREFIX_AI_TEXT = os.getenv("REDIS_PREFIX_AI_TEXT")
+REDIS_PREFIX_AI_TTS = os.getenv("REDIS_PREFIX_AI_TTS")
 
 RECORDING_START = os.getenv("RECORDING_START")
 RECORDING_END = os.getenv("RECORDING_END")
