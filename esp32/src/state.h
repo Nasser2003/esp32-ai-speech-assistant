@@ -12,6 +12,7 @@ enum class State {
     WAITING_AI_RESPONSE, // When esp is waiting for a response from the server
     PLAY_RESPONSE,        // When esp is playing the audio response from the server
     ERROR,          // When esp encounters an error
+    BLE_PROVISIONING,  // When esp is in BLE provisioning mode, waiting for the app to send the wifi credentials
 };
 enum class RecordedState {
     SENDING_AUDIO,
@@ -33,6 +34,7 @@ const char* stateToString(State state) {
         case State::WAITING_AI_RESPONSE: return "WAITING_AI_RESPONSE";
         case State::PLAY_RESPONSE:        return "PLAY_RESPONSE";
         case State::ERROR:          return "ERROR";
+        case State::BLE_PROVISIONING:  return "BLE_PROVISIONING";
         default:                    return "UNKNOWN_STATE";
     }
 }

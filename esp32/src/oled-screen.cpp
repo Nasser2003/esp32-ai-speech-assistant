@@ -53,7 +53,7 @@ void OledScreen128x32::addMessage(std::string message) {
 	uint32_t last_display_duration = this->textShowEndTime - this->textShowStartTime;
 	this->textShowStartTime = millis();
 	this->textShowEndTime = millis() + last_display_duration;
-	this->lastMessage = this->currentMessage;
+	// this->lastMessage = this->currentMessage; // TODO check if this is needed, it might break the animation
 	this->currentMessage = this->currentMessage + message;
 	// to sync the animation timer with the new message
 	// this->textShowStartTime = millis() + (textShowEndTime - textShowStartTime);

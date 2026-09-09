@@ -1,12 +1,14 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiProv.h>
+
 #include "audio-player.h"
 #include "audio-recorder.h"
 #include "oled-screen.h"
 #include "sinus-pulse.h"
 #include "timer.h"
 #include "state.h"
-#include "credentials.h"
-#include <WiFi.h>
+#include "env.h"
 #include "websocket-controller.h"
 
 // Pins
@@ -77,13 +79,14 @@ RecordedState recordedState = RecordedState::SENDING_AUDIO;
 static bool isButtonPressed();
 static bool executeOnlyOnceOnStateChange();
 void setWebSocketCallback();
+void setWifiCallback();
 
 void setup()
 {
     state = State::INIT;
     Serial.begin(115200);
     delay(1000);
-
+    
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     ledcSetup(0, 5000, 8); // to use PWM feature on the led
     ledcAttachPin(BLUE_LED, 0); // PWM way to setup pinMode
@@ -92,6 +95,7 @@ void setup()
     // WiFi.setTxPower(WIFI_POWER_8_5dBm); // Set the WiFi transmission power to 8.5 dBm to avoid the brownout effect
     audioPlayer.setVolume(15);
     setWebSocketCallback();
+    setWifiCallback();
 }
 
 void loop()
@@ -118,7 +122,7 @@ void loop()
         if (executeOnlyOnceOnStateChange()) 
         {
             screen.displayMessage("Connecting to WiFi...");
-            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            WiFi.begin();
             connectingTimeoutTimer.start();
         }
         if (WiFi.status() == WL_CONNECTED) 
@@ -133,12 +137,12 @@ void loop()
     case State::CONNECTION_FAILED:
         if (executeOnlyOnceOnStateChange()) 
         {
-            screen.addMessage("\n x Failed to connect to WiFi.");
+            screen.addMessage("\n x Failed to connect to WiFi. Starting BLE provisioning...");
             errorTimer.start();
         }
         if (errorTimer.isElapsed()) 
         {
-            state = State::ERROR;
+            state = State::BLE_PROVISIONING;
         }
         break;
     case State::CONNECTED_WIFI:
@@ -165,6 +169,7 @@ void loop()
         }
         else if (errorTimer.isElapsed()) 
         {
+            screen.displayMessage("[SYS] Error occurred: failed to connect to API.");
             state = State::ERROR;
         }
         break;
@@ -275,11 +280,25 @@ void loop()
     case State::ERROR:
         if (executeOnlyOnceOnStateChange())
         {
-            screen.displayMessage("[SYS] Error occurred. Press the button to reset.");
+            screen.addMessage("\nPress the button to reset.");
         }
         if (isButtonPressed()) {
             state = State::CONNECTING_WIFI;
         }
+        break;
+    case State::BLE_PROVISIONING:
+        if (executeOnlyOnceOnStateChange())
+        {
+            screen.displayMessage("[SYS] BLE provisioning mode. Use the app to send WiFi credentials.");
+            WiFiProv.beginProvision(
+                WIFI_PROV_SCHEME_BLE,
+                WIFI_PROV_SCHEME_HANDLER_FREE_BTDM,
+                WIFI_PROV_SECURITY_1,
+                "abcd1234",
+                "ESP32_Provisioning"
+            );
+        }
+        break;
     default:
         break;
     }
@@ -291,7 +310,6 @@ void loop()
         ledcWrite(0, blueLedPulse.getPulseState());
         recorder.update();
         screen.update();
-        // audioPlayer.loop();
         webSocket.update();
     }
 
@@ -350,5 +368,35 @@ void setWebSocketCallback() {
             screen.addMessage(api_message);
         }
 
+    });
+}
+
+void setWifiCallback() {
+    WiFi.onEvent([](arduino_event_t* event) {
+        switch (event->event_id) {
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            Serial.println("[WiFi] Connected");
+            state = State::CONNECTED_WIFI;
+            break;
+        case ARDUINO_EVENT_PROV_START:
+            Serial.println("[WiFiProv] Started");
+            break;
+        case ARDUINO_EVENT_PROV_CRED_SUCCESS:
+            Serial.println("[WiFiProv] Credentials accepted");
+            break;
+        case ARDUINO_EVENT_PROV_CRED_FAIL:
+            Serial.println("[WiFiProv] Credentials failed");
+            state = State::ERROR;
+            screen.displayMessage("[SYS] Error occurred: BLE provisioning failed : Credentials rejected.");
+            break;
+            case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            Serial.println("[WiFi] Disconnected");
+            state = State::ERROR;
+            screen.displayMessage("[SYS] Error occurred: WiFi disconnected.");
+            break;
+        case ARDUINO_EVENT_PROV_END:
+            Serial.println("[WiFiProv] Ended");
+            break;
+        }
     });
 }
