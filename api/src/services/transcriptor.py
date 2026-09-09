@@ -6,9 +6,9 @@ class Transcriptor:
         self.model = WhisperModel(MODEL, device="cpu", compute_type="int8", )
     
     def transcribe(self, audio: bytes, language: str):
-        audio = self._convert_binary_to_np(audio)
+        audio_np = self._convert_binary_to_np(audio)
         
-        segments, info = self.model.transcribe(audio, language=language)
+        segments, info = self.model.transcribe(audio_np, language=language)
         for segment in segments:
             text = segment.text.strip()
             # filter some segments
@@ -24,7 +24,7 @@ class Transcriptor:
             yield text, info.language
              
     @staticmethod
-    def _convert_binary_to_np(data) -> np.float32:
+    def _convert_binary_to_np(data) -> np.ndarray:
         audio = np.frombuffer(data, dtype=np.int16)
-        audio = audio.astype(np.float32) / 32768.0
-        return audio
+        audio_np = audio.astype(np.float32) / 32768.0
+        return audio_np

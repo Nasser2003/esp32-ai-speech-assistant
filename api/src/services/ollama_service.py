@@ -1,4 +1,7 @@
-def ask_ai(client, model, question):
+from ollama import Client
+
+
+def ask_ai(client: Client, model: str, question: str):
 
     response = client.chat(
         model=model,

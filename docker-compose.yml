@@ -9,16 +9,69 @@ services:
       dockerfile: docker/Dockerfile
     volumes:
       - ./api:/app
-      - ./api:/app
+      - /app/.venv # Anonyme volume to avoid reinstalling on every build
     command: uv run uvicorn src.main:app --host 0.0.0.0 --port 5000 --reload
     networks:
       - esp-ai-network
     depends_on:
       - postgres
       - redis 
-    env_file:
-      - .env
+    environment:
+      PYTHONPATH: /app/src
+      PYTHONUNBUFFERED: "1"
 
+      API_WEBSOCKET_PATH: ${API_WEBSOCKET_PATH}
+
+      OLLAMA_URL: ${OLLAMA_URL}
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL}
+      TRANSCRIPTION_CHUNK_SIZE: ${TRANSCRIPTION_CHUNK_SIZE}
+      TRANSCRIPTION_WINDOW_SIZE: ${TRANSCRIPTION_WINDOW_SIZE}
+      TRANSCRIPTION_MODEL: ${TRANSCRIPTION_MODEL}
+      
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_TTL_EXPIRE_TIME: ${REDIS_TTL_EXPIRE_TIME}
+      REDIS_KEY_PREFIX_LANGUAGE: ${REDIS_KEY_PREFIX_LANGUAGE}
+      REDIS_KEY_PREFIX_RECORD: ${REDIS_KEY_PREFIX_RECORD}
+      REDIS_KEY_PREFIX_TRANSCRIPTION: ${REDIS_KEY_PREFIX_TRANSCRIPTION}
+      REDIS_KEY_PREFIX_AI_TEXT: ${REDIS_KEY_PREFIX_AI_TEXT}
+      REDIS_KEY_PREFIX_AI_TTS: ${REDIS_KEY_PREFIX_AI_TTS}
+
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+
+      API_PORT: ${API_PORT}
+
+      VOICE_LANGUAGE: ${VOICE_LANGUAGE}
+      SIGNAL_RECORDING_START: ${SIGNAL_RECORDING_START}
+      SIGNAL_RECORDING_END: ${SIGNAL_RECORDING_END}
+      SIGNAL_TRANSCRIPTION_START: ${SIGNAL_TRANSCRIPTION_START}
+      SIGNAL_TRANSCRIPTION_END: ${SIGNAL_TRANSCRIPTION_END}
+      SIGNAL_AI_TEXT_START: ${SIGNAL_AI_TEXT_START}
+      SIGNAL_AI_TEXT_END: ${SIGNAL_AI_TEXT_END}
+      SIGNAL_AI_TTS_START: ${SIGNAL_AI_TTS_START}
+      SIGNAL_AI_TTS_END: ${SIGNAL_AI_TTS_END}
+      SIGNAL_WEBSOCKET_CLOSE: ${SIGNAL_WEBSOCKET_CLOSE}
+
+  postgres:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - esp-ai-network
+
+  redis:
+    image: docker.io/library/redis:8
+    networks:
+      - esp-ai-network
 
 # Define external network for communication between containers
 networks:
@@ -28,4 +81,3 @@ networks:
 # Create storage containers for Postgres and Redis data
 volumes:
   postgres_data:
-  redis_data:

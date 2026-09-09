@@ -1,51 +1,52 @@
-
-
 from fastapi import WebSocket
-
-from src.services.redis_controller import RedisController
-from src.config import ( REDIS_PREFIX_AI_TTS, AI_TTS_START, AI_TTS_END, 
-    TTL_EXPIRE_TIME, LANGUAGE_MAP, REDIS_PREFIX_LANGUAGE )
 from piper import PiperVoice
-from src.services.audio_process_utils import resample_audio
 from simple_websocket.errors import ConnectionClosed
 
-async def worker_ai_tts(just_id, client_ws: WebSocket, redis_controller: RedisController): # purpose: send ai text answer to the client
+from services.audio_process_utils import resample_audio
+from services.redis_controller import RedisController
+from config import ( REDIS_KEY_PREFIX_AI_TTS, SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, 
+    LANGUAGE_MAP, REDIS_KEY_PREFIX_LANGUAGE )
+
+# purpose: send ai text answer to the client
+async def worker_ai_tts(just_id, client_ws: WebSocket, redis_controller: RedisController): 
     try:
-        ai_tts_key = REDIS_PREFIX_AI_TTS + just_id
+        ai_tts_key = REDIS_KEY_PREFIX_AI_TTS + just_id
         
         while True:
-            _, element = await redis_controller.blpop(ai_tts_key, TTL_EXPIRE_TIME)
-            IS_AI_TTS_START = element == bytes(AI_TTS_START, "utf-8")
-            IS_AI_TTS_END = element == bytes(AI_TTS_END, "utf-8")
+            result = await redis_controller.blpop(ai_tts_key)
+            if result is None:
+                break
+            else:
+                _, ai_text_answer_bytes = result
+                
+            if ai_text_answer_bytes is None:
+                break
             
-            if element is None:
-                continue
-            elif IS_AI_TTS_START:
-                await client_ws.send_text(AI_TTS_START)
-            elif IS_AI_TTS_END:
-                await client_ws.send_text(AI_TTS_END)
+            if isinstance(ai_text_answer_bytes, bytes):
+                ai_answer_str = ai_text_answer_bytes.decode('utf-8')
+                
+            if ai_answer_str == SIGNAL_AI_TTS_START:
+                await client_ws.send_text(SIGNAL_AI_TTS_START)
+            elif ai_answer_str == SIGNAL_AI_TTS_END:
+                await client_ws.send_text(SIGNAL_AI_TTS_END)
                 break
             else:
                 # Determine the segment language for TTS synthesis
-                lang = await redis_controller.get_majoritary(REDIS_PREFIX_LANGUAGE + just_id)
-                await redis_controller.setTTL(REDIS_PREFIX_LANGUAGE + just_id, TTL_EXPIRE_TIME)  # Reset the TTL for the language key
-                # print(f"[AI TTS] Detected language: {lang}\n")
+                lang = await redis_controller.get_majoritary(REDIS_KEY_PREFIX_LANGUAGE + just_id)
+                await redis_controller.setTTL(REDIS_KEY_PREFIX_LANGUAGE + just_id)
                 if lang is None:
                     lang = "en"
-                if LANGUAGE_MAP.get(lang) is None:
-                    print(f"Warning: Language not supported for TTS synthesis ({lang}). Defaulting to English.")
-                    lang = "en"
-                lang_path = LANGUAGE_MAP.get(lang)[0]
-                sample_rate = LANGUAGE_MAP.get(lang)[1]
-                config_path = lang_path + ".json"
-                voice = PiperVoice.load(lang_path, config_path)
-            
-                ai_respons_segment = element.decode("utf-8")
+                config = LANGUAGE_MAP.get(lang)
+                if config is not None:
+                    lang_path =config.path
+                    sample_rate = config.sample_rate
+                    config_path = lang_path + ".json"
+                    voice = PiperVoice.load(lang_path, config_path)
 
-                for chunk in voice.synthesize(ai_respons_segment):
-                    audio_bytes = chunk.audio_int16_bytes
-                    audio_bytes = resample_audio(audio_bytes, sample_rate, 16_000)
-                    await client_ws.send_bytes(audio_bytes)
+                    for chunk in voice.synthesize(ai_answer_str):
+                        audio_bytes = chunk.audio_int16_bytes
+                        audio_bytes = resample_audio(audio_bytes, sample_rate, 16_000)
+                        await client_ws.send_bytes(audio_bytes)
 
     except ConnectionClosed as e:
         print(f"[AI TTS] WebSocket closed: {e}")

@@ -1,47 +1,55 @@
-from src.config import (REDIS_PREFIX_TRANSCRIPTION, TRANSCRIPTION_START, TRANSCRIPTION_END, 
-    TTL_EXPIRE_TIME, REDIS_PREFIX_AI_TTS, REDIS_PREFIX_AI_TEXT, AI_TTS_START, AI_TTS_END, 
-    AI_TEXT_START, AI_TEXT_END, CHAT_MODEL)
-from src.services.ollama_service import ask_ai
+import ollama
+from services.redis_controller import RedisController
+from config import (REDIS_KEY_PREFIX_TRANSCRIPTION, SIGNAL_TRANSCRIPTION_START, 
+    SIGNAL_TRANSCRIPTION_END, REDIS_KEY_PREFIX_AI_TTS, 
+    REDIS_KEY_PREFIX_AI_TEXT, SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, 
+    SIGNAL_AI_TEXT_START, SIGNAL_AI_TEXT_END, OLLAMA_CHAT_MODEL)
+from services.ollama_service import ask_ai
 from simple_websocket.errors import ConnectionClosed
 from fastapi import WebSocket
 
 # purpose: process transcription depending on window size
-async def worker_ask(just_id, client_ws: WebSocket, redis_controller, client):
+async def worker_ask(just_id: str, client_ws: WebSocket, redis_controller: RedisController, 
+                     client_ia: ollama.Client):
     try:
-        trans_key = REDIS_PREFIX_TRANSCRIPTION + just_id
-        ai_tts_key = REDIS_PREFIX_AI_TTS + just_id
-        ai_text_key = REDIS_PREFIX_AI_TEXT + just_id
+        trans_key = REDIS_KEY_PREFIX_TRANSCRIPTION + just_id
+        ai_tts_key = REDIS_KEY_PREFIX_AI_TTS + just_id
+        ai_text_key = REDIS_KEY_PREFIX_AI_TEXT + just_id
         question = ""
-        
+
         while True:
             # check for transcriptions
-            _, element = await redis_controller.blpop(trans_key, TTL_EXPIRE_TIME)
-            IS_TRANSCRIPTION_START = element == bytes(TRANSCRIPTION_START, "utf-8")
-            IS_TRANSCRIPTION_END = element == bytes(TRANSCRIPTION_END, "utf-8")
-            print(f"[WEBSOCKET] Transcription element: {element.decode('utf-8') if element else 'None'}")
-            
-            if element is None:
-                continue
-            elif IS_TRANSCRIPTION_START:
-                await client_ws.send_text(TRANSCRIPTION_START)
-            elif IS_TRANSCRIPTION_END:
-                await client_ws.send_text(TRANSCRIPTION_END)
+            result = await redis_controller.blpop(trans_key)
+            if result is None:
                 break
             else:
-                id_seg, text = element.decode('utf-8').split(":", 1)
+                _, transc_bytes = result
+                
+            if transc_bytes is None:
+                break
+            if isinstance(transc_bytes, bytes):
+                transcription_str = transc_bytes.decode('utf-8')
+                print(f"[WEBSOCKET] Transcription element: {transcription_str}")
+            if transcription_str == SIGNAL_TRANSCRIPTION_START:
+                await client_ws.send_text(SIGNAL_TRANSCRIPTION_START)
+            elif transcription_str == SIGNAL_TRANSCRIPTION_END:
+                await client_ws.send_text(SIGNAL_TRANSCRIPTION_END)
+                break
+            else:
+                id_seg, text = transcription_str.split(":", 1)
                 question += f"{text} "
                 await client_ws.send_text(text)
         
-        await redis_controller.r_push_expire(ai_tts_key, AI_TTS_START, TTL_EXPIRE_TIME)
-        await redis_controller.r_push_expire(ai_text_key, AI_TEXT_START, TTL_EXPIRE_TIME)
+        await redis_controller.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_START)
+        await redis_controller.r_push_expire(ai_text_key, SIGNAL_AI_TEXT_START)
         
-        for sentense in ask_ai(client, CHAT_MODEL, question):
-            await redis_controller.r_push_expire(ai_tts_key, sentense, TTL_EXPIRE_TIME)
-            await redis_controller.r_push_expire(ai_text_key, sentense, TTL_EXPIRE_TIME)
+        for sentense in ask_ai(client_ia, OLLAMA_CHAT_MODEL, question):
+            await redis_controller.r_push_expire(ai_tts_key, sentense)
+            await redis_controller.r_push_expire(ai_text_key, sentense)
             await client_ws.send_text(sentense)
             
-        await redis_controller.r_push_expire(ai_tts_key, AI_TTS_END, TTL_EXPIRE_TIME)
-        await redis_controller.r_push_expire(ai_text_key, AI_TEXT_END, TTL_EXPIRE_TIME)
+        await redis_controller.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_END)
+        await redis_controller.r_push_expire(ai_text_key, SIGNAL_AI_TEXT_END)
     except ConnectionClosed as e:
         print(f"[AI ASK] WebSocket closed: {e}")
 

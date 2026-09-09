@@ -1,52 +1,60 @@
 import os
-from dotenv import load_dotenv
-
-# This line is not necesary because podman compose is injecting itself the 
-#   variables into the container thanks to this part in docker-compose.yml:
-# service: 
-#   api:
-#     env_file:
-#       - .env
-# load_dotenv() 
+from models.voice_config import VoiceConfig
 
 
-OLLAMA_URL = os.getenv("OLLAMA_URL")
-OLLAMA_CHAT_PATH = os.getenv("OLLAMA_CHAT_PATH")
+def getenv_checked(var_name: str) -> str:
+    value = os.getenv(var_name)
+    if value is None:
+        raise ValueError(f"Environment variable '{var_name}' is not set.")
+    return value
 
-TTL_EXPIRE_TIME = int(os.getenv("TTL_EXPIRE_TIME"))
-TRANSCRIPTION_CHUNK_SIZE = int(os.getenv("TRANSCRIPTION_CHUNK_SIZE"))
-TRANSCRIPTION_WINDOW_SIZE = int(os.getenv("TRANSCRIPTION_WINDOW_SIZE"))
+def getenv_checked_int(var_name: str) -> int:
+    value_str = getenv_checked(var_name)
+    try:
+        return int(value_str)
+    except ValueError:
+        raise ValueError(f"Environment variable '{var_name}' must be an integer, got '{value_str}'.")
+    
+API_WEBSOCKET_PATH = getenv_checked("API_WEBSOCKET_PATH")
+    
+OLLAMA_URL = getenv_checked("OLLAMA_URL")
+OLLAMA_CHAT_MODEL = getenv_checked("OLLAMA_CHAT_MODEL")
 
-TRANS_MODEL = os.getenv("TRANS_MODEL")
-CHAT_MODEL = os.getenv("CHAT_MODEL")
+TRANSCRIPTION_CHUNK_SIZE = getenv_checked_int("TRANSCRIPTION_CHUNK_SIZE")
+TRANSCRIPTION_WINDOW_SIZE = getenv_checked_int("TRANSCRIPTION_WINDOW_SIZE")
 
-REDIS_PORT = int(os.getenv("REDIS_PORT"))
-API_PORT = int(os.getenv("API_PORT"))
+TRANSCRIPTION_MODEL = getenv_checked("TRANSCRIPTION_MODEL")
 
+REDIS_HOST = getenv_checked("REDIS_HOST")
+REDIS_PORT = getenv_checked_int("REDIS_PORT")
+REDIS_TTL_EXPIRE_TIME = getenv_checked_int("REDIS_TTL_EXPIRE_TIME")
+REDIS_KEY_PREFIX_LANGUAGE = getenv_checked("REDIS_KEY_PREFIX_LANGUAGE")
+REDIS_KEY_PREFIX_RECORD = getenv_checked("REDIS_KEY_PREFIX_RECORD")
+REDIS_KEY_PREFIX_TRANSCRIPTION = getenv_checked("REDIS_KEY_PREFIX_TRANSCRIPTION")
+REDIS_KEY_PREFIX_AI_TEXT = getenv_checked("REDIS_KEY_PREFIX_AI_TEXT")
+REDIS_KEY_PREFIX_AI_TTS = getenv_checked("REDIS_KEY_PREFIX_AI_TTS")
 
-VOICE_LANGUAGE = os.getenv("VOICE_LANGUAGE")
-LANGUAGE_MAP = {
-    "en": ["data/en_US-ryan-low.onnx", 16_000],
-    "fr": ["data/fr_FR-upmc-medium.onnx", 22_050],
-    "ru": ["data/ru_RU-ruslan-medium.onnx", 22_050],
+POSTGRES_HOST = getenv_checked("POSTGRES_HOST")
+POSTGRES_PORT = getenv_checked_int("POSTGRES_PORT")
+POSTGRES_DB = getenv_checked("POSTGRES_DB")
+POSTGRES_USER = getenv_checked("POSTGRES_USER")
+POSTGRES_PASSWORD = getenv_checked("POSTGRES_PASSWORD")
+
+API_PORT = getenv_checked_int("API_PORT")
+
+VOICE_LANGUAGE = getenv_checked("VOICE_LANGUAGE")
+LANGUAGE_MAP: dict[str, VoiceConfig] = {
+    "en": VoiceConfig("data/en_US-ryan-low.onnx", 16_000),
+    "fr": VoiceConfig("data/fr_FR-upmc-medium.onnx", 22_050),
+    "ru": VoiceConfig("data/ru_RU-ruslan-medium.onnx", 22_050),
 }
 
-REDIS_PREFIX_LANGUAGE = os.getenv("REDIS_PREFIX_LANGUAGE")
-REDIS_PREFIX_RECORD = os.getenv("REDIS_PREFIX_RECORD")
-REDIS_PREFIX_TRANSCRIPTION = os.getenv("REDIS_PREFIX_TRANSCRIPTION")
-REDIS_PREFIX_AI_TEXT = os.getenv("REDIS_PREFIX_AI_TEXT")
-REDIS_PREFIX_AI_TTS = os.getenv("REDIS_PREFIX_AI_TTS")
-
-RECORDING_START = os.getenv("RECORDING_START")
-RECORDING_END = os.getenv("RECORDING_END")
-
-TRANSCRIPTION_START = os.getenv("TRANSCRIPTION_START")
-TRANSCRIPTION_END = os.getenv("TRANSCRIPTION_END")
-
-AI_TEXT_START = os.getenv("AI_TEXT_START")
-AI_TEXT_END = os.getenv("AI_TEXT_END")
-
-AI_TTS_START = os.getenv("AI_TTS_START")
-AI_TTS_END = os.getenv("AI_TTS_END")
-
-WEBSOCKET_CLOSE = os.getenv("WEBSOCKET_CLOSE")
+SIGNAL_RECORDING_START = getenv_checked("SIGNAL_RECORDING_START")
+SIGNAL_RECORDING_END = getenv_checked("SIGNAL_RECORDING_END")
+SIGNAL_TRANSCRIPTION_START = getenv_checked("SIGNAL_TRANSCRIPTION_START")
+SIGNAL_TRANSCRIPTION_END = getenv_checked("SIGNAL_TRANSCRIPTION_END")
+SIGNAL_AI_TEXT_START = getenv_checked("SIGNAL_AI_TEXT_START")
+SIGNAL_AI_TEXT_END = getenv_checked("SIGNAL_AI_TEXT_END")
+SIGNAL_AI_TTS_START = getenv_checked("SIGNAL_AI_TTS_START")
+SIGNAL_AI_TTS_END = getenv_checked("SIGNAL_AI_TTS_END")
+SIGNAL_WEBSOCKET_CLOSE = getenv_checked("SIGNAL_WEBSOCKET_CLOSE")
