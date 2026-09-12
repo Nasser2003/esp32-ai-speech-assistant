@@ -5,7 +5,7 @@ import shortuuid
 import asyncio
 
 from config import (REDIS_TTL_EXPIRE_TIME, REDIS_HOST, REDIS_KEY_PREFIX_RECORD, 
-    SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, SIGNAL_WEBSOCKET_CLOSE, 
+    SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, 
     TRANSCRIPTION_MODEL, REDIS_PORT, OLLAMA_URL, API_WEBSOCKET_PATH)
 from models.question import Question
 from services.ollama_service import ask_ai
@@ -15,10 +15,11 @@ from workers.transcribe import worker_transcribe
 from workers.ai_ask import worker_ask
 from workers.ai_tts import worker_ai_tts
 from workers.ai_answer import worker_ai_answer
+from workers.worker_supervisor import terminate_session_if_workers_done
 
 app = FastAPI()
 
-client_ia = ollama.Client(OLLAMA_URL)
+client_ia = ollama.AsyncClient(OLLAMA_URL)
 redis_controller = RedisController(host=REDIS_HOST, port=REDIS_PORT, db=0, ttl=REDIS_TTL_EXPIRE_TIME)
 transcriptor = Transcriptor(TRANSCRIPTION_MODEL)
 
@@ -40,6 +41,7 @@ def home():
 async def websocket(client_ws: WebSocket):
     just_id = shortuuid.uuid()
     audio_stream_id = REDIS_KEY_PREFIX_RECORD + just_id
+    supervisor_task = None
     
     try:
         await client_ws.accept()
@@ -49,28 +51,33 @@ async def websocket(client_ws: WebSocket):
             IS_BYTES = "bytes" in message
             IS_RECORDING_START = IS_SIGNAL and message["text"] == SIGNAL_RECORDING_START
             IS_RECORDING_END = IS_SIGNAL and message["text"] == SIGNAL_RECORDING_END
-            IS_WEBSOCKET_CLOSE = IS_SIGNAL and \
-                (message["text"] == SIGNAL_WEBSOCKET_CLOSE or message["type"] == "websocket.disconnect")
+            IS_WEBSOCKET_CLOSE = (message["type"] == "websocket.disconnect")
             
             if message is None:
                 break
             if IS_RECORDING_START:
                 print(f"[WS] Recording started for {just_id}", flush=True)
-                await redis_controller.r_push_expire(audio_stream_id, SIGNAL_RECORDING_START)  # Push a value to indicate the end of the session
-                # thread for audio transcription
-                asyncio.create_task(worker_transcribe(just_id, redis_controller, transcriptor))
-                # thread for asking ai
-                asyncio.create_task(worker_ask(just_id, client_ws, redis_controller, client_ia))
-                # thread for sending ai tts audio
-                asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_controller))
-                # thread for sending ai answer
-                asyncio.create_task(worker_ai_answer(just_id, client_ws, redis_controller))
+                # Push a value to indicate the end of the session
+                await redis_controller.r_push_expire(audio_stream_id, SIGNAL_RECORDING_START)  
+                worker_tasks = [
+                    # thread for audio transcription
+                    asyncio.create_task(worker_transcribe(just_id, redis_controller, transcriptor)),
+                    # thread for asking ai
+                    asyncio.create_task(worker_ask(just_id, client_ws, redis_controller, client_ia)),
+                    # thread for sending ai tts audio
+                    asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_controller)),
+                    # thread for sending ai answer
+                    asyncio.create_task(worker_ai_answer(just_id, client_ws, redis_controller)),
+                ]
+                supervisor_task = asyncio.create_task(
+                    terminate_session_if_workers_done(worker_tasks, client_ws, just_id)
+                )
             elif IS_RECORDING_END:
                 print(f"[WS] Recording ended for {just_id}", flush=True)
                 await redis_controller.r_push_expire(audio_stream_id, SIGNAL_RECORDING_END)  # Push a value to indicate the end of the session
             elif IS_WEBSOCKET_CLOSE:
                 print(f"[WS] WebSocket close signal received for {just_id}", flush=True)
-                await client_ws.close()
+                # await client_ws.close()
                 break
             elif IS_BYTES:
                 audio_bytes = message["bytes"]
@@ -83,5 +90,7 @@ async def websocket(client_ws: WebSocket):
 
     except Exception as e:
         print(f"[WS] Unexpected error for {just_id}: {e}")
+        
     finally:
-        pass
+        if supervisor_task is not None and not supervisor_task.done():
+            supervisor_task.cancel()

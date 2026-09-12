@@ -4,6 +4,7 @@ from config import (REDIS_KEY_PREFIX_TRANSCRIPTION, SIGNAL_TRANSCRIPTION_START, 
     REDIS_KEY_PREFIX_RECORD, SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, TRANSCRIPTION_CHUNK_SIZE, #
     TRANSCRIPTION_WINDOW_SIZE, VOICE_LANGUAGE, REDIS_KEY_PREFIX_LANGUAGE)
 import asyncio
+from services.test_utils import test_received_audio
 
 _ASYNC_GENERATOR_END = object() # Object used to signal the end of the async generator
 
@@ -110,6 +111,7 @@ async def worker_transcribe(just_id: str, redis_controller : RedisController, tr
             continue  # Skip processing if the start signal is received
         
         if audio == bytes(SIGNAL_RECORDING_END, 'utf-8'):
+            test_received_audio(temp_wav)
             # segment_to_transcribe = processed_audio_bytes
             print(f"[WORKER] Received end signal for: {audio_stream_id}")
             await redis_controller.r_push_expire(trans_key, SIGNAL_TRANSCRIPTION_END)

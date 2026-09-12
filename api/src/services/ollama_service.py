@@ -1,9 +1,9 @@
-from ollama import Client
+from ollama import AsyncClient
 
 
-def ask_ai(client: Client, model: str, question: str):
+async def ask_ai(client: AsyncClient, model: str, question: str):
 
-    response = client.chat(
+    response = await client.chat(
         model=model,
         messages=[
             {"role": "user", "content": question}
@@ -13,12 +13,12 @@ def ask_ai(client: Client, model: str, question: str):
 
     sentence = ""
 
-    for chunk in response:
+    async for chunk in response:
         text = chunk["message"]["content"]
 
         if text:
             sentence += text
-            if text.strip().endswith(('.', '!', '?', ',', ';', ':')) and len(sentence) > 10:
+            if text.strip().endswith(('.', '!', '?', ',', ';', ':', '\n')) and len(sentence) > 10:
                 yield sentence
                 sentence = ""
     yield f"{sentence}\n"

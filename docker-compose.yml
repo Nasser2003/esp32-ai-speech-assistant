@@ -54,7 +54,6 @@ services:
       SIGNAL_AI_TEXT_END: ${SIGNAL_AI_TEXT_END}
       SIGNAL_AI_TTS_START: ${SIGNAL_AI_TTS_START}
       SIGNAL_AI_TTS_END: ${SIGNAL_AI_TTS_END}
-      SIGNAL_WEBSOCKET_CLOSE: ${SIGNAL_WEBSOCKET_CLOSE}
 
   postgres:
     image: docker.io/library/postgres:17

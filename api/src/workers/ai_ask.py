@@ -10,7 +10,7 @@ from fastapi import WebSocket
 
 # purpose: process transcription depending on window size
 async def worker_ask(just_id: str, client_ws: WebSocket, redis_controller: RedisController, 
-                     client_ia: ollama.Client):
+                     client_ia: ollama.AsyncClient):
     try:
         trans_key = REDIS_KEY_PREFIX_TRANSCRIPTION + just_id
         ai_tts_key = REDIS_KEY_PREFIX_AI_TTS + just_id
@@ -43,10 +43,11 @@ async def worker_ask(just_id: str, client_ws: WebSocket, redis_controller: Redis
         await redis_controller.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_START)
         await redis_controller.r_push_expire(ai_text_key, SIGNAL_AI_TEXT_START)
         
-        for sentense in ask_ai(client_ia, OLLAMA_CHAT_MODEL, question):
-            await redis_controller.r_push_expire(ai_tts_key, sentense)
-            await redis_controller.r_push_expire(ai_text_key, sentense)
-            await client_ws.send_text(sentense)
+        async for sentense in ask_ai(client_ia, OLLAMA_CHAT_MODEL, question):
+            if sentense and sentense.strip():
+                print(f"[AI ASK] AI answer: {sentense}")
+                await redis_controller.r_push_expire(ai_tts_key, sentense)
+                await redis_controller.r_push_expire(ai_text_key, sentense)
             
         await redis_controller.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_END)
         await redis_controller.r_push_expire(ai_text_key, SIGNAL_AI_TEXT_END)

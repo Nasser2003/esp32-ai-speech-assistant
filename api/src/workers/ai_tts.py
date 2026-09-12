@@ -14,13 +14,16 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_controller: RedisCo
         
         while True:
             result = await redis_controller.blpop(ai_tts_key)
+            print(f"[AI TTS] Result from Redis: {result}")
             if result is None:
-                break
+                # break
+                continue
             else:
                 _, ai_text_answer_bytes = result
                 
             if ai_text_answer_bytes is None:
-                break
+                # break
+                continue
             
             if isinstance(ai_text_answer_bytes, bytes):
                 ai_answer_str = ai_text_answer_bytes.decode('utf-8')

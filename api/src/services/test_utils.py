@@ -3,7 +3,7 @@ import io
 import wave
 
                 
-def create_wav_file(audio_bytes, filename: str):
+def _create_wav_file(audio_bytes, filename: str):
     wav_buffer = io.BytesIO()
 
     with wave.open(wav_buffer, "wb") as wav:
@@ -17,7 +17,7 @@ def create_wav_file(audio_bytes, filename: str):
                 f.write(wav_bytes)
 
 def test_received_audio(audio_bytes):
-    create_wav_file(audio_bytes, "test_received_audio.wav")
+    _create_wav_file(audio_bytes, "test_received_audio.wav")
 
 def test_audio_tts(LANGUAGE_MAP, VOICE_LANGUAGE):
     lang_path = LANGUAGE_MAP.get(VOICE_LANGUAGE)
@@ -30,4 +30,4 @@ def test_audio_tts(LANGUAGE_MAP, VOICE_LANGUAGE):
         audio_bytes += chunk.audio_int16_bytes
 
     # create a WAV file from the audio bytes
-    create_wav_file(audio_bytes, "test_tts.wav")
+    _create_wav_file(audio_bytes, "test_tts.wav")
