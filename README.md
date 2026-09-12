@@ -39,6 +39,10 @@ pio device monitor
 Remark: you need to add the **pio path** to the **environment** to use the `"pio"` applet.
 Otherwise, we would need to use `"%USERPROFILE%\.platformio\penv\Scripts\platformio.exe"`
 
+
+### Battery management
+To make the device portable, a 3.7v battery was used + 
+
 ## 2. Ollama
 
 Ollama is a tool developped by Meta to make the ai management easier. It can be seen as the "Docker" of ia models.

@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <WiFiProv.h>
 
+#include "i2s-audio-manager.h"
 #include "audio-player.h"
 #include "audio-recorder.h"
 #include "oled-screen.h"
@@ -13,9 +14,15 @@
 #include "power-controller.h"
 
 // Variables
-AudioPlayer audioPlayer(ENV::SPEAKER_PINS::D_OUT_PIN, ENV::SPEAKER_PINS::BCLK_PIN, ENV::SPEAKER_PINS::LRC_PIN);
+I2SAudioManager i2sManager(
+    ENV::I2S_PINS::BCLK,
+    ENV::I2S_PINS::WS,
+    ENV::I2S_PINS::MIC_SD,
+    ENV::I2S_PINS::SPK_DOUT
+);
+AudioPlayer audioPlayer(i2sManager);
 OledScreen128x32 screen(ENV::SCREEN_PINS::SDA, ENV::SCREEN_PINS::SCK, true, 150);
-AudioRecorder recorder(ENV::MIC_PINS::SCK_PIN, ENV::MIC_PINS::WS_PIN, ENV::MIC_PINS::SD_PIN);
+AudioRecorder recorder(i2sManager);
 SinusPulse blueLedPulse(1, 270);
 WebsocketController webSocket(ENV::API_HOST, ENV::API_PORT, 
     ENV::API_WEBSOCKET_PATH, ENV::RECORDING_START, 
@@ -26,7 +33,7 @@ PowerController powerController(ENV::BATTERY_PIN, 1000);
 Timer preInitTimer(10);
 Timer initTimer(2000);
 Timer connectingTimeoutTimer(1000);
-Timer connectedWifiTimer(1);
+Timer connectedWifiTimer(500);
 Timer minRecordingTimer(2000);
 Timer maxRecordingTimer(15000);
 Timer recordStopTimer(1000);
@@ -36,6 +43,9 @@ Timer batteryMeasureTimer(2000);
 
 static bool ai_text_finished = false;
 static bool ai_tts_finished = false;
+static bool wifiIntentionallyDisabled = false;
+static bool wsSessionStarted = false;
+static unsigned long wifiReconnectStartTime = 0;
 
 
 // Function declarations
@@ -179,6 +189,12 @@ void loop()
             ai_text_finished = false;
             ai_tts_finished = false;
             audioPlayer.pushStream(nullptr, 0);
+
+            // Disable WiFi to save power while idle
+            wifiIntentionallyDisabled = true;
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_OFF);
+            Serial.println("[WiFi] Disabled (idle)");
         }
 
         if (isButtonPressed()) // button pressed
@@ -190,9 +206,10 @@ void loop()
     {
         if (runOnceOnStateChange()) 
         {
-            if (!webSocket.connect()) {
-                changeState(State::CONNECTING_API);
-            }
+            wsSessionStarted = false;
+            wifiReconnectStartTime = millis();
+
+            // Start recording immediately without waiting for WiFi
             audioPlayer.play("/button-press.wav");
             screen.displayMessage("Recording audio...");
             recorder.startRecording();
@@ -200,26 +217,47 @@ void loop()
             minRecordingTimer.start();
             maxRecordingTimer.start();
 
-            webSocket.startAudioSession();
+            // Trigger non-blocking WiFi reconnect in background if needed
+            if (WiFi.status() != WL_CONNECTED) {
+                wifiIntentionallyDisabled = false;
+                WiFi.mode(WIFI_STA);
+                WiFi.begin();
+                Serial.println("[WiFi] Reconnecting in background...");
+            } else {
+                if (webSocket.connect()) {
+                    webSocket.startAudioSession();
+                    wsSessionStarted = true;
+                }
+            }
         } else {
-            // Send one recorded segment if available
-            size_t chunkSize;
-            const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
-    
-            if (segment != nullptr) {
-                webSocket.sendAudio(segment, chunkSize);
+            // Check if WiFi reconnected in background
+            if (!wsSessionStarted && WiFi.status() == WL_CONNECTED) {
+                Serial.println("[WiFi] Reconnected in background");
+                if (webSocket.connect()) {
+                    webSocket.startAudioSession();
+                    wsSessionStarted = true;
+                }
+            }
+
+            // Send recorded chunks if WebSocket session is active
+            if (wsSessionStarted) {
+                size_t chunkSize;
+                const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
+                if (segment != nullptr) {
+                    webSocket.sendAudio(segment, chunkSize);
+                }
             }
         }
 
         if (!isButtonPressed() && minRecordingTimer.isElapsed())
         {
             changeState(State::RECORDED);
-        }
-        if (maxRecordingTimer.isElapsed())
+        } else if (maxRecordingTimer.isElapsed())
         {
             changeState(State::RECORDED);
+        } else {
+            break; // BREAK is conditionnal because we want to execute directly the next case "RECORDED" directly
         }
-        break;
     }
     case State::RECORDED:
     {
@@ -232,17 +270,34 @@ void loop()
             recordStopTimer.start();
         } else {
             if (getRecordedState() == RecordedState::SENDING_AUDIO) {
-                // Send one recorded segment if available
-                size_t chunkSize;
-                const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
-        
-                if (segment != nullptr) {
-                    webSocket.sendAudio(segment, chunkSize);
-                } else {
-                    webSocket.endAudioSession();
-                    changeRecordedState(RecordedState::ENDING_AUDIO);
+                // If WiFi/WS hasn't connected yet, wait for background connection (up to 10s timeout)
+                if (!wsSessionStarted) {
+                    if (WiFi.status() == WL_CONNECTED) {
+                        Serial.println("[WiFi] Reconnected in background (sending)");
+                        if (webSocket.connect()) {
+                            webSocket.startAudioSession();
+                            wsSessionStarted = true;
+                        }
+                    } else if (millis() - wifiReconnectStartTime > 10000) {
+                        Serial.println("[WiFi] Reconnection timeout during send");
+                        screen.displayMessage("[SYS] WiFi reconnection failed.");
+                        changeState(State::ERROR);
+                        break;
+                    }
                 }
-                // Blocked state untill websocket receives the end signal
+
+                if (wsSessionStarted) {
+                    // Drain all recorded segments
+                    size_t chunkSize;
+                    const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
+            
+                    if (segment != nullptr) {
+                        webSocket.sendAudio(segment, chunkSize);
+                    } else {
+                        webSocket.endAudioSession();
+                        changeRecordedState(RecordedState::ENDING_AUDIO);
+                    }
+                }
             }
         }
         break;
@@ -251,6 +306,7 @@ void loop()
         if (runOnceOnStateChange())
         {
             screen.addMessage("\n[SYS] Waiting for AI\n");
+            audioPlayer.play("/ai-begin.wav");
         }
         break;
     case State::PLAY_RESPONSE:
@@ -263,6 +319,7 @@ void loop()
             // audioPlayer.endStream();
             changeState(State::BATTERY_MEASURE);
             webSocket.disconnect();
+            audioPlayer.play("/ai-end.wav");
         }
         break;
     case State::ERROR:
@@ -277,7 +334,7 @@ void loop()
     case State::BLE_PROVISIONING:
         if (runOnceOnStateChange())
         {
-            screen.displayMessage("[SYS] BLE provisioning mode. Use the app to send WiFi credentials.");
+            screen.displayMessage("[SYS] BLE prov. mode: Use the app to connect to WiFi. Or press the button to retry.");
             WiFiProv.beginProvision(
                 WIFI_PROV_SCHEME_BLE,
                 WIFI_PROV_SCHEME_HANDLER_FREE_BTDM,
@@ -285,6 +342,9 @@ void loop()
                 "abcd1234",
                 "ESP32_Provisioning"
             );
+        }
+        if (isButtonPressed()) {
+            changeState(State::CONNECTING_WIFI);
         }
         break;
     default:
@@ -361,7 +421,7 @@ void setWifiCallback() {
         switch (event->event_id) {
         case ARDUINO_EVENT_WIFI_STA_GOT_IP:
             Serial.println("[WiFi] Connected");
-            changeState(State::CONNECTED_WIFI);
+            // changeState(State::CONNECTED_WIFI);
             break;
         case ARDUINO_EVENT_PROV_START:
             Serial.println("[WiFiProv] Started");
@@ -375,9 +435,13 @@ void setWifiCallback() {
             screen.displayMessage("[SYS] Error: BLE provisioning failed : Credentials rejected.");
             break;
             case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-            Serial.println("[WiFi] Disconnected");
-            changeState(State::ERROR);
-            screen.displayMessage("[SYS] Error: WiFi disconnected.");
+            if (!wifiIntentionallyDisabled) {
+                Serial.println("[WiFi] Disconnected unexpectedly");
+                changeState(State::ERROR);
+                screen.displayMessage("[SYS] Error: WiFi disconnected.");
+            } else {
+                Serial.println("[WiFi] Disconnected (intentional)");
+            }
             break;
         case ARDUINO_EVENT_PROV_END:
             Serial.println("[WiFiProv] Ended");

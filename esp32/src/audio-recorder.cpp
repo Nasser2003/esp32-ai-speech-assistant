@@ -1,4 +1,5 @@
 #include "audio-recorder.h"
+#include "i2s-audio-manager.h"
 
 #include <Arduino.h>
 #include <LittleFS.h>
@@ -13,18 +14,8 @@ constexpr uint16_t AudioRecorder::CHANNELS;
 constexpr size_t AudioRecorder::WAV_HEADER_SIZE;
 constexpr uint32_t AudioRecorder::DEFAULT_TIMEOUT;
 
-namespace {
-constexpr i2s_port_t I2S_MIC_PORT = I2S_NUM_1;
-}
-
-AudioRecorder::AudioRecorder(
-    int sckPin,
-    int wsPin,
-    int sdPin
-)
-    : sckPin(sckPin), // Serial Clock (SCK) used to synchronize data transmission between the ESP32 and the INMP441 microphone
-      wsPin(wsPin), // Word Select (WS) used to indicate the start of a new audio sample and to select the left or right channel for stereo audio
-      sdPin(sdPin), // Serial Data (SD) used to transmit the audio data from the INMP441 microphone to the ESP32
+AudioRecorder::AudioRecorder(I2SAudioManager& manager)
+    : manager(manager),
       wavBuffer(nullptr), // Buffer to store the recorded audio data in WAV format
       wavSize(0), // Size of the recorded audio data in bytes
 
@@ -54,30 +45,13 @@ AudioRecorder::AudioRecorder(
 
 bool AudioRecorder::init()
 {
-    // Define the I2S configuration for the INMP441 microphone
-    i2s_config_t config = createConfig();
+    // The I2S driver is now managed by I2SAudioManager.
+    // No need to install it here — activateRX() will be called
+    // before each recording session.
 
-    // Activate/initialize the I2S microphone driver so my program can use it, but if fails return false
-    const esp_err_t result = i2s_driver_install(I2S_MIC_PORT, &config, 0, nullptr);
-    if (result != ESP_OK) {
-        Serial.printf("[AudioRecorder] i2s_driver_install failed: %d\n", result);
-        return false;
-    }
+    initialized = true;
 
-    // Configure the pins for the I2S microphone, but if fails deactivate/free the driver and return false
-    i2s_pin_config_t pins = createPinConfig();
-
-    const esp_err_t pinResult = i2s_set_pin(I2S_MIC_PORT, &pins); // Set the I2S pins for the microphone
-    if (pinResult != ESP_OK) {
-        Serial.printf("[AudioRecorder] i2s_set_pin failed: %d\n", pinResult);
-        i2s_driver_uninstall(I2S_MIC_PORT);
-        return false;
-    }
-
-    i2s_zero_dma_buffer(I2S_MIC_PORT); // Clear the DMA buffer to avoid any garbage data being read from the microphone
-    initialized = true; // Set the initialized flag to true to indicate that the INMP441 has been successfully initialized
-
-    Serial.println("[AudioRecorder] INMP441 initialized");
+    Serial.println("[AudioRecorder] Initialized (I2S managed by I2SAudioManager)");
     return true;
 }
 
@@ -99,8 +73,17 @@ bool AudioRecorder::startRecording(uint32_t timeoutSeconds)
 
     clear();
 
+    // --------------------------------------------------
+    // 1b. Activate RX mode on the shared I2S port
+    // --------------------------------------------------
+
+    if (!manager.activateRX()) {
+        Serial.println("[AudioRecorder] Failed to activate I2S RX");
+        return false;
+    }
+
     // Clear old data from the I2S DMA buffer.
-    i2s_zero_dma_buffer(I2S_MIC_PORT);
+    i2s_zero_dma_buffer(I2S_PORT);
 
     // --------------------------------------------------
     // 2. Calculate maximum buffer size
@@ -223,7 +206,7 @@ void AudioRecorder::update()
 
     const esp_err_t result =
         i2s_read(
-            I2S_MIC_PORT,
+            I2S_PORT,
             rawSamples,
             sizeof(rawSamples),
             &bytesRead,
@@ -297,6 +280,19 @@ void AudioRecorder::update()
 
         sample =
             static_cast<int16_t>(hpOut);
+
+
+        // --------------------------------------------------
+        // Preamp gain (boost INMP441 low output)
+        // --------------------------------------------------
+
+        int32_t boosted =
+            static_cast<int32_t>(sample) * PREAMP_GAIN;
+
+        if (boosted > INT16_MAX) boosted = INT16_MAX;
+        if (boosted < INT16_MIN) boosted = INT16_MIN;
+
+        sample = static_cast<int16_t>(boosted);
 
 
         // --------------------------------------------------
@@ -386,6 +382,19 @@ bool AudioRecorder::stopRecording()
     }
 
     isRecording = false;
+
+    // --------------------------------------------------
+    // Trim tail samples (remove button click artifact)
+    // --------------------------------------------------
+
+    if (samplesWritten > TRIM_TAIL_SAMPLES) {
+        samplesWritten -= TRIM_TAIL_SAMPLES;
+        Serial.printf(
+            "[AudioRecorder] Trimmed last %u samples (~%ums)\n",
+            static_cast<unsigned>(TRIM_TAIL_SAMPLES),
+            static_cast<unsigned>(TRIM_TAIL_SAMPLES * 1000 / SAMPLE_RATE)
+        );
+    }
 
     // --------------------------------------------------
     // Calculate actual recording size
@@ -643,42 +652,4 @@ void AudioRecorder::writeWavHeader(uint8_t* buffer, uint32_t dataSize)
     // data
     std::memcpy(buffer + 36, "data", 4);
     std::memcpy(buffer + 40, &dataSize, 4);
-}
-
-i2s_config_t AudioRecorder::createConfig() {
-    i2s_config_t config = {}; // Initialize the config structure to zero 
-    
-    // Configure the I2S peripheral: 
-    //  - I2S_MODE_MASTER -> esp32 will generate the clock for the I2S communication
-    //  - I2S_MODE_RX -> esp32 will receive audio data from the INMP441 microphone
-    config.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_RX);
-
-    // Configure the I2S peripheral
-    config.sample_rate = SAMPLE_RATE; // number of measurements per second (ex: 16 kHz)
-    config.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT; // Size of each audio sample (ex: 32 bits)
-    config.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT; // INMP441 is mono, left channel only
-    config.communication_format = I2S_COMM_FORMAT_STAND_I2S; // How to interpret signals sent by the INMP441 microphone
-    config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; // Interrupt level 1, the lowest priority, to avoid interfering with other tasks
-    // DMA (Direct Memory Access) is used to transfer data between the I2S peripheral and memory without CPU intervention => faster
-    //   => when 1st buffer is full, DMA will automatically switch to the 2nd buffer and trigger an interrupt to notify the CPU 
-    //      that the 1st buffer is ready to be processed. if the last buffer is full, DMA will switch to the 1st buffer.
-    config.dma_buf_count = 8; // 8 DMA buffers to store audio data before processing
-    config.dma_buf_len = 256; // Number of audio samples stored per DMA buffer
-    config.use_apll = false; // Use the APLL clock for better accuracy, but it is not necessary for audio recording
-    config.tx_desc_auto_clear = false; // Automatically clear the TX descriptor if there is an underflow condition
-    config.fixed_mclk = 0; // The MCLK pin is not used, so it is set to 0
-
-    return config;
-}
-
-i2s_pin_config_t AudioRecorder::createPinConfig() {
-    i2s_pin_config_t pinConfig = {}; // Initialize the pinConfig structure to zero
-
-    // Configure the I2S pins
-    pinConfig.bck_io_num = sckPin; // Serial Clock (SCK) pin
-    pinConfig.ws_io_num = wsPin; // Word Select (WS) pin
-    pinConfig.data_out_num = I2S_PIN_NO_CHANGE; // No data output pin, as we are only recording audio
-    pinConfig.data_in_num = sdPin; // Serial Data (SD) pin
-
-    return pinConfig;
 }

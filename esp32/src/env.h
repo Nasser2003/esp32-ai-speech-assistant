@@ -21,18 +21,14 @@ struct ENV { // constexpr + const => mendatory for char* type, optional for int 
     static constexpr const int BUTTON_PIN = 2;
     static constexpr const int BATTERY_PIN = 4;
     static constexpr const int BLUE_LED = 14;
-    struct SPEAKER_PINS {
-        static constexpr const int D_OUT_PIN = 39;
-        static constexpr const int BCLK_PIN = 42;
-        static constexpr const int LRC_PIN = 3;
+    struct I2S_PINS {
+        static constexpr const int BCLK = 18;       // shared clock (MIC SCK + SPEAKER BLCK)
+        static constexpr const int WS = 17;          // shared word select (MIC MIC WS + SPEAKER LRC)
+        static constexpr const int MIC_SD = 40;      // mic data in (INMP441 SD)
+        static constexpr const int SPK_DOUT = 39;    // speaker data out (MAX98357A DIN)
     };
     struct SCREEN_PINS {
         static constexpr const int SDA = 15;
         static constexpr const int SCK = 7;
-    };
-    struct MIC_PINS {
-        static constexpr const int SCK_PIN = 18;
-        static constexpr const int WS_PIN = 17;
-        static constexpr const int SD_PIN = 40;
     };
 };

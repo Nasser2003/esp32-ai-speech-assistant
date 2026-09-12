@@ -1,16 +1,10 @@
 #include "audio-player.h"
+#include "i2s-audio-manager.h"
 
 #include <LittleFS.h>
-#include "Audio.h"
 
-AudioPlayer::AudioPlayer(
-    int doutPin,
-    int bclkPin,
-    int lrcPin
-)
-    : doutPin(doutPin),
-      bclkPin(bclkPin),
-      lrcPin(lrcPin),
+AudioPlayer::AudioPlayer(I2SAudioManager& manager)
+    : manager(manager),
       pcmQueue(nullptr),
       pcmTaskHandle(nullptr),
       streamPlaying(false),
@@ -37,11 +31,8 @@ bool AudioPlayer::init()
         ESP.getPsramSize() / (1024 * 1024)
     );
 
-    // I2S pour PCM/TTS
-    if (!configureI2S()) {
-        Serial.println("Error : configuration I2S");
-        return false;
-    }
+    // I2S is now managed by I2SAudioManager.
+    // activateTX() will be called before each playback.
 
     // TTS QUEUE
     pcmQueue = xQueueCreate(
@@ -81,6 +72,12 @@ bool AudioPlayer::init()
 
 bool AudioPlayer::play(const char* path)
 {
+    // Ensure TX mode is active before playing
+    if (!manager.activateTX()) {
+        Serial.println("[AudioPlayer] Failed to activate I2S TX");
+        return false;
+    }
+
     File file = LittleFS.open(path, "r");
 
     if (!file) {
@@ -148,6 +145,12 @@ bool AudioPlayer::startStream()
 {
     if (streamPlaying) {
         Serial.println("Stream déjà actif");
+        return false;
+    }
+
+    // Ensure TX mode is active before streaming
+    if (!manager.activateTX()) {
+        Serial.println("[AudioPlayer] Failed to activate I2S TX for stream");
         return false;
     }
 
@@ -325,92 +328,9 @@ void AudioPlayer::pcmTask()
     }
 }
 
-// ======================================================
-// I2S
-// ======================================================
-
-bool AudioPlayer::configureI2S()
-{
-    i2s_config_t config = {
-        .mode =
-            (i2s_mode_t)(
-                I2S_MODE_MASTER |
-                I2S_MODE_TX
-            ),
-
-        .sample_rate = 16000,
-
-        .bits_per_sample =
-            I2S_BITS_PER_SAMPLE_16BIT,
-
-        .channel_format =
-            I2S_CHANNEL_FMT_ONLY_LEFT,
-
-        .communication_format =
-            I2S_COMM_FORMAT_STAND_I2S,
-
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-
-        .dma_buf_count = 16,
-
-        .dma_buf_len = 256,
-
-        .use_apll = false,
-
-        .tx_desc_auto_clear = true,
-
-        .fixed_mclk = 0
-    };
-
-    esp_err_t result = i2s_driver_install(
-        I2S_NUM_0,
-        &config,
-        0,
-        nullptr
-    );
-
-    if (result != ESP_OK) {
-        Serial.printf(
-            "Erreur i2s_driver_install : %d\n",
-            result
-        );
-        return false;
-    }
-
-    i2s_pin_config_t pins = {
-        .bck_io_num = bclkPin,
-        .ws_io_num = lrcPin,
-        .data_out_num = doutPin,
-        .data_in_num = I2S_PIN_NO_CHANGE
-    };
-
-    result = i2s_set_pin(
-        I2S_NUM_0,
-        &pins
-    );
-
-    if (result != ESP_OK) {
-        Serial.printf(
-            "Erreur i2s_set_pin : %d\n",
-            result
-        );
-
-        return false;
-    }
-
-    return true;
-}
-
 // EXAMPLE
-// constexpr int I2S_DOUT = 39;
-// constexpr int I2S_BCLK = 42;
-// constexpr int I2S_LRC = 3;
-
-// AudioPlayer audioPlayer(
-//     I2S_DOUT,
-//     I2S_BCLK,
-//     I2S_LRC
-// );
+// I2SAudioManager i2sManager(18, 17, 40, 39);
+// AudioPlayer audioPlayer(i2sManager);
 
 // void setup() {
 //     Serial.begin(115200);
@@ -430,6 +350,5 @@ bool AudioPlayer::configureI2S()
 // }
 
 // void loop() {
-//     audioPlayer.loop();
 //     vTaskDelay(1);
 // }

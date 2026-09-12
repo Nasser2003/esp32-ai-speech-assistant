@@ -3,14 +3,12 @@
 #include <Arduino.h>
 #include <driver/i2s.h>
 
+class I2SAudioManager;
+
 // Sensor: INMP441
 class AudioRecorder {
 public:
-    AudioRecorder(
-        int sckPin,
-        int wsPin,
-        int sdPin
-    );
+    AudioRecorder(I2SAudioManager& manager);
 
     bool init();
 
@@ -48,11 +46,14 @@ private:
     static constexpr size_t NORMALIZATION_BINS = 256;        // Number of amplitude ranges used to build the normalization histogram
     static constexpr float NORMALIZATION_PERCENTILE = 0.995f; // Percentile used to ignore short abnormal peaks during normalization
     static constexpr size_t RECORDED_SAMPLE_CHUNK_SIZE = 8000; // Maximum number of PCM samples returned per chunk (0.5 s at 16 kHz)
+    static constexpr int32_t PREAMP_GAIN = 4;                // Real-time gain applied to each sample to boost INMP441 low output
+    static constexpr size_t TRIM_TAIL_SAMPLES = 3200;        // Samples to discard at end of recording (~200ms at 16 kHz, removes button click)
 
-    // INMP441 I2S pins
-    int sckPin;                                    // I2S serial clock (SCK/BCLK) pin
-    int wsPin;                                     // I2S word select (WS/LRCLK) pin
-    int sdPin;                                     // I2S serial data (SD) input pin
+    // I2S port (shared via manager)
+    static constexpr i2s_port_t I2S_PORT = I2S_NUM_0;
+
+    // I2S audio manager reference
+    I2SAudioManager& manager;
 
     // WAV buffer
     uint8_t* wavBuffer;                            // Buffer containing both the WAV header and PCM audio data
@@ -88,10 +89,6 @@ private:
         uint8_t* buffer,
         uint32_t dataSize
     );
-
-    // I2S configuration
-    i2s_config_t createConfig();                   // Creates the I2S configuration for the INMP441
-    i2s_pin_config_t createPinConfig();            // Creates the I2S pin configuration
 
     // audio chunking
     int chunkCursor;                                // Current position in the PCM data for fetching recorded chunks
