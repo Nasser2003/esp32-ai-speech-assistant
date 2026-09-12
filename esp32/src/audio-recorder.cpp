@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
-#include <driver/i2s.h>
 #include <cstring> // string operations
 #include <cmath> // math functions
 #include <climits> // math limit constants
@@ -683,40 +682,3 @@ i2s_pin_config_t AudioRecorder::createPinConfig() {
 
     return pinConfig;
 }
-
-// EXAMPLE
-// void setup()
-// {
-//     Serial.begin(115200);
-//     delay(1000);
-
-//     Serial.println("Initialisation recorder...");
-
-//     if (!recorder.init()) {
-//         Serial.println("Recorder initialization failed");
-
-//         while (true) {
-//             delay(1000);
-//         }
-//     }
-
-//     Serial.println("Recording...");
-
-//     if (!recorder.startRecording(5)) {
-//         Serial.println("Recording failed");
-
-//         while (true) {
-//             delay(1000);
-//         }
-//     }
-
-//     if (!recorder.save("/recording.wav")) {
-//         Serial.println("Saving failed");
-
-//         while (true) {
-//             delay(1000);
-//         }
-//     }
-
-//     Serial.println("Recording ready!");
-// }

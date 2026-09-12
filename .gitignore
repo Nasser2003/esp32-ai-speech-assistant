@@ -1,9 +1,13 @@
 # API
 .venv
 __pycache__
-.env
 
 # ESP32
 .pio
 .vscode
-credentials.h
+env.h
+
+# Generated files
+.env
+.env.example
+.$architecture.drawio.bkp
