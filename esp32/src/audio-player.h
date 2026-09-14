@@ -2,13 +2,12 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
-#include "Audio.h"
 
-class Audio;
+class I2SAudioManager;
 
 class AudioPlayer {
 public:
-    AudioPlayer(int doutPin, int bclkPin, int lrcPin);
+    AudioPlayer(I2SAudioManager& manager);
 
     bool init();
     bool play(const char* path);
@@ -23,17 +22,20 @@ public:
     void setVolume(uint8_t volume);
 
 private:
-    int doutPin;
-    int bclkPin;
-    int lrcPin;
+    // I2S audio manager reference
+    I2SAudioManager& manager;
 
     // TTS
-    static constexpr size_t PCM_CHUNK_SIZE = 4096;
-    static constexpr size_t PCM_QUEUE_LENGTH = 16;
+    // Chunk size for the PCM FreeRTOS queue.
+    // Kept small (512 B) so the queue footprint stays ~20 KB, leaving enough
+    // contiguous heap (~22 KB+) for ArduinoWebsockets to buffer a binary TTS frame.
+    static constexpr size_t PCM_CHUNK_SIZE = 512;
+    // 40 × 516 B ≈ 20 KB queue — ~640 ms of 16-kHz/16-bit/mono buffering.
+    static constexpr size_t PCM_QUEUE_LENGTH = 40;
 
     struct AudioChunk {
         size_t length;
-        uint8_t data[PCM_CHUNK_SIZE];
+        int16_t data[PCM_CHUNK_SIZE / sizeof(int16_t)];
     };
 
     QueueHandle_t pcmQueue;
@@ -48,6 +50,4 @@ private:
 
     float volumeGain = 0.3f;
     void applyVolume(int16_t* samples, size_t sampleCount);
-
-    bool configureI2S();
 };

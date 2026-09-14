@@ -3,14 +3,12 @@
 #include <Arduino.h>
 #include <driver/i2s.h>
 
+class I2SAudioManager;
+
 // Sensor: INMP441
 class AudioRecorder {
 public:
-    AudioRecorder(
-        int sckPin,
-        int wsPin,
-        int sdPin
-    );
+    AudioRecorder(I2SAudioManager& manager);
 
     bool init();
 
@@ -24,21 +22,17 @@ public:
 
     const uint8_t* fetchRecordedChunk(size_t& size);
 
-    bool save(const char* path);
-
     void clear();
 
     bool isRecordingState() const;
 
-    const uint8_t* data() const;
-    size_t getSize() const;
+    size_t getSize() const; // bytes of recorded PCM data from startRecording()
 
 private:
     // Audio format
     static constexpr uint32_t SAMPLE_RATE = 16000;           // Number of audio samples captured per second (16 kHz)
     static constexpr uint16_t BITS_PER_SAMPLE = 16;          // Bit depth of the final PCM audio data
     static constexpr uint16_t CHANNELS = 1;                  // Number of audio channels (mono)
-    static constexpr size_t WAV_HEADER_SIZE = 44;            // Size of the standard PCM WAV header in bytes
     static constexpr uint32_t DEFAULT_TIMEOUT = 15;          // Maximum recording duration in seconds by default
 
     // Audio processing
@@ -48,15 +42,14 @@ private:
     static constexpr size_t NORMALIZATION_BINS = 256;        // Number of amplitude ranges used to build the normalization histogram
     static constexpr float NORMALIZATION_PERCENTILE = 0.995f; // Percentile used to ignore short abnormal peaks during normalization
     static constexpr size_t RECORDED_SAMPLE_CHUNK_SIZE = 8000; // Maximum number of PCM samples returned per chunk (0.5 s at 16 kHz)
+    static constexpr int32_t PREAMP_GAIN = 4;                // Real-time gain applied to each sample to boost INMP441 low output
+    static constexpr size_t TRIM_TAIL_SAMPLES = 3200;        // Samples to discard at end of recording (~200ms at 16 kHz, removes button click)
 
-    // INMP441 I2S pins
-    int sckPin;                                    // I2S serial clock (SCK/BCLK) pin
-    int wsPin;                                     // I2S word select (WS/LRCLK) pin
-    int sdPin;                                     // I2S serial data (SD) input pin
+    // I2S port (shared via manager)
+    static constexpr i2s_port_t I2S_PORT = I2S_NUM_0;
 
-    // WAV buffer
-    uint8_t* wavBuffer;                            // Buffer containing both the WAV header and PCM audio data
-    size_t wavSize;                                // Actual size of the recorded WAV data in bytes
+    // I2S audio manager reference
+    I2SAudioManager& manager;
 
     // Recording timing
     uint32_t recordingStartTime;                   // Timestamp when the current recording started
@@ -66,33 +59,16 @@ private:
     float hpPrevIn;                                // Previous input sample used by the high-pass filter
     float hpPrevOut;                               // Previous output sample used by the high-pass filter
 
-    // PCM audio data
-    int16_t* pcmData;                              // Pointer to the PCM section inside wavBuffer, after the 44-byte WAV header
+    // Double buffer : replaces old buffer stored in PSRAM
+    int16_t chunkBuf[2][RECORDED_SAMPLE_CHUNK_SIZE];
+    size_t writePos;    // write position in the active buffer
+    int activeBuf;      // 0 or 1 : buffer in fill mode
+    int readyBuf;       // -1 = nothing ready, else 0/1 : buffer ready to be fetched
+    size_t readySize;   // valid samples in readyBuf
 
-    size_t maxSampleCount;                         // Maximum number of PCM samples that can be stored
-    size_t samplesWritten;                         // Number of PCM samples currently stored
-
-    // Audio statistics
-    int16_t minSample;                             // Lowest sample value measured during recording
-    int16_t maxSample;                             // Highest sample value measured during recording
-
-    uint64_t sumSquares;                           // Sum of squared sample values, used to calculate RMS
-    uint64_t measuredSamples;                      // Number of samples included in the audio statistics
+    size_t samplesWritten; // total captured since startRecording()
 
     // Recorder state
     bool initialized;                              // True when the I2S microphone has been successfully initialized
     bool isRecording;                              // True while audio is currently being recorded
-
-    // WAV generation
-    void writeWavHeader(
-        uint8_t* buffer,
-        uint32_t dataSize
-    );
-
-    // I2S configuration
-    i2s_config_t createConfig();                   // Creates the I2S configuration for the INMP441
-    i2s_pin_config_t createPinConfig();            // Creates the I2S pin configuration
-
-    // audio chunking
-    int chunkCursor;                                // Current position in the PCM data for fetching recorded chunks
 };

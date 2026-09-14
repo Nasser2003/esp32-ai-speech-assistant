@@ -34,10 +34,15 @@ pio run -t upload
 pio run -t uploadfs
 # Access the logs of our esp
 pio device monitor
+# if the 
 ```
 
 Remark: you need to add the **pio path** to the **environment** to use the `"pio"` applet.
 Otherwise, we would need to use `"%USERPROFILE%\.platformio\penv\Scripts\platformio.exe"`
+
+
+### Battery management
+To make the device portable, a 3.7v battery was used + 
 
 ## 2. Ollama
 

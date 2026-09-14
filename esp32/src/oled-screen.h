@@ -4,7 +4,7 @@ public:
     OledScreen128x32(int SDA_PIN, int SCK_PIN, bool animated = false, int speed = 100);
     void init();
     void displayMessage(std::string message);
-    void addMessage(std::string message);
+    void addMessage(std::string message, bool forceUpdate = false);
     void update();
 private:
     int SDA_PIN;

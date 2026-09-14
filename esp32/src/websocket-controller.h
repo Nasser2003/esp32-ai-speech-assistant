@@ -11,8 +11,7 @@ public:
         uint16_t port, 
         const char* path, 
         const char* RECORDING_START, 
-        const char* RECORDING_END,
-        const char* WEBSOCKET_CLOSE
+        const char* RECORDING_END
     );
 
     bool connect();
@@ -35,5 +34,4 @@ private:
     const char* path;
     const char* RECORDING_START;
     const char* RECORDING_END;
-    const char* WEBSOCKET_CLOSE;
 };

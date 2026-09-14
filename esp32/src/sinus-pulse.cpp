@@ -19,7 +19,8 @@ void SinusPulse::stopPulse() {
 int SinusPulse::getPulseState()
 {
     if (!isPulsing) {
-        return 0;
+        // return 0; // external led
+        return 255; // integrated led => 255 = off
     }
 
     const unsigned long elapsedTime =

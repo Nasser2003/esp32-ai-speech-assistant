@@ -9,6 +9,6 @@ public:
     bool isElapsed() const;
 
 private:
-    uint32_t startTime = 0;
-    uint32_t duration = 0;
+    uint32_t startTime;
+    uint32_t duration;
 };
