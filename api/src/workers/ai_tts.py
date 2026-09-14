@@ -5,7 +5,7 @@ from simple_websocket.errors import ConnectionClosed
 from services.audio_process_utils import resample_audio
 from services.redis_controller import RedisController
 from config import ( REDIS_KEY_PREFIX_AI_TTS, SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, 
-    LANGUAGE_MAP, REDIS_KEY_PREFIX_LANGUAGE )
+    LANGUAGE_MAP, REDIS_KEY_PREFIX_LANGUAGE, TTS_CHUNK_SIZE )
 
 # purpose: send ai text answer to the client
 async def worker_ai_tts(just_id, client_ws: WebSocket, redis_controller: RedisController): 
@@ -16,13 +16,11 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_controller: RedisCo
             result = await redis_controller.blpop(ai_tts_key)
             print(f"[AI TTS] Result from Redis: {result}")
             if result is None:
-                # break
                 continue
             else:
                 _, ai_text_answer_bytes = result
                 
             if ai_text_answer_bytes is None:
-                # break
                 continue
             
             if isinstance(ai_text_answer_bytes, bytes):
@@ -49,7 +47,8 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_controller: RedisCo
                     for chunk in voice.synthesize(ai_answer_str):
                         audio_bytes = chunk.audio_int16_bytes
                         audio_bytes = resample_audio(audio_bytes, sample_rate, 16_000)
-                        await client_ws.send_bytes(audio_bytes)
+                        for i in range(0, len(audio_bytes), TTS_CHUNK_SIZE):
+                            await client_ws.send_bytes(audio_bytes[i:i + TTS_CHUNK_SIZE])
 
     except ConnectionClosed as e:
         print(f"[AI TTS] WebSocket closed: {e}")
