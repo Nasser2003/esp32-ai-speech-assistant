@@ -1,4 +1,5 @@
 #include "i2s-audio-manager.h"
+#include <Arduino.h>
 
 I2SAudioManager::I2SAudioManager(
     int bclkPin,

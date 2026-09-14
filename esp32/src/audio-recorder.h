@@ -22,21 +22,17 @@ public:
 
     const uint8_t* fetchRecordedChunk(size_t& size);
 
-    bool save(const char* path);
-
     void clear();
 
     bool isRecordingState() const;
 
-    const uint8_t* data() const;
-    size_t getSize() const;
+    size_t getSize() const; // bytes of recorded PCM data from startRecording()
 
 private:
     // Audio format
     static constexpr uint32_t SAMPLE_RATE = 16000;           // Number of audio samples captured per second (16 kHz)
     static constexpr uint16_t BITS_PER_SAMPLE = 16;          // Bit depth of the final PCM audio data
     static constexpr uint16_t CHANNELS = 1;                  // Number of audio channels (mono)
-    static constexpr size_t WAV_HEADER_SIZE = 44;            // Size of the standard PCM WAV header in bytes
     static constexpr uint32_t DEFAULT_TIMEOUT = 15;          // Maximum recording duration in seconds by default
 
     // Audio processing
@@ -55,10 +51,6 @@ private:
     // I2S audio manager reference
     I2SAudioManager& manager;
 
-    // WAV buffer
-    uint8_t* wavBuffer;                            // Buffer containing both the WAV header and PCM audio data
-    size_t wavSize;                                // Actual size of the recorded WAV data in bytes
-
     // Recording timing
     uint32_t recordingStartTime;                   // Timestamp when the current recording started
     uint32_t recordingTimeout;                     // Maximum recording duration in milliseconds
@@ -67,29 +59,16 @@ private:
     float hpPrevIn;                                // Previous input sample used by the high-pass filter
     float hpPrevOut;                               // Previous output sample used by the high-pass filter
 
-    // PCM audio data
-    int16_t* pcmData;                              // Pointer to the PCM section inside wavBuffer, after the 44-byte WAV header
+    // Double buffer : replaces old buffer stored in PSRAM
+    int16_t chunkBuf[2][RECORDED_SAMPLE_CHUNK_SIZE];
+    size_t writePos;    // write position in the active buffer
+    int activeBuf;      // 0 or 1 : buffer in fill mode
+    int readyBuf;       // -1 = nothing ready, else 0/1 : buffer ready to be fetched
+    size_t readySize;   // valid samples in readyBuf
 
-    size_t maxSampleCount;                         // Maximum number of PCM samples that can be stored
-    size_t samplesWritten;                         // Number of PCM samples currently stored
-
-    // Audio statistics
-    int16_t minSample;                             // Lowest sample value measured during recording
-    int16_t maxSample;                             // Highest sample value measured during recording
-
-    uint64_t sumSquares;                           // Sum of squared sample values, used to calculate RMS
-    uint64_t measuredSamples;                      // Number of samples included in the audio statistics
+    size_t samplesWritten; // total captured since startRecording()
 
     // Recorder state
     bool initialized;                              // True when the I2S microphone has been successfully initialized
     bool isRecording;                              // True while audio is currently being recorded
-
-    // WAV generation
-    void writeWavHeader(
-        uint8_t* buffer,
-        uint32_t dataSize
-    );
-
-    // audio chunking
-    int chunkCursor;                                // Current position in the PCM data for fetching recorded chunks
 };

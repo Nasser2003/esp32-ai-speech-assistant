@@ -32,7 +32,7 @@ PowerController powerController(ENV::BATTERY_PIN, 1000);
 // Timers for state transitions and timeouts
 Timer preInitTimer(10);
 Timer initTimer(2000);
-Timer connectingTimeoutTimer(1000);
+Timer connectingTimeoutTimer(2000);
 Timer connectedWifiTimer(500);
 Timer minRecordingTimer(2000);
 Timer maxRecordingTimer(15000);
@@ -43,9 +43,6 @@ Timer batteryMeasureTimer(2000);
 
 static bool ai_text_finished = false;
 static bool ai_tts_finished = false;
-static bool wifiIntentionallyDisabled = false;
-static bool wsSessionStarted = false;
-static unsigned long wifiReconnectStartTime = 0;
 
 
 // Function declarations
@@ -113,7 +110,7 @@ void loop()
     case State::CONNECTION_FAILED:
         if (runOnceOnStateChange()) 
         {
-            screen.addMessage("\n x Failed to connect to WiFi. Starting BLE provisioning...");
+            screen.addMessage("\n x Failed to connect to WiFi. Starting BLE provisioning...", true);
             errorTimer.start();
         }
         if (errorTimer.isElapsed()) 
@@ -124,7 +121,7 @@ void loop()
     case State::CONNECTED_WIFI:
         if (runOnceOnStateChange()) 
         {
-            screen.addMessage("\n v Connected to WiFi!");
+            screen.addMessage("\n v Connected to WiFi!", true);
             connectedWifiTimer.start();
         }
         if (connectedWifiTimer.isElapsed()) 
@@ -140,7 +137,7 @@ void loop()
                 webSocket.disconnect();
             } else {
                 errorTimer.start();
-                screen.addMessage("\n x Problem connecting to API.");
+                screen.addMessage("\n x Problem connecting to API.", true);
             }
         }
         else if (errorTimer.isElapsed()) 
@@ -152,7 +149,7 @@ void loop()
     case State::CONNECTED_API:
         if (runOnceOnStateChange()) 
         {
-            screen.addMessage("\n v Connected to API!");
+            screen.addMessage("\n v Connected to API!", true);
             connectedWifiTimer.start();
         }
         if (connectedWifiTimer.isElapsed()) 
@@ -189,12 +186,6 @@ void loop()
             ai_text_finished = false;
             ai_tts_finished = false;
             audioPlayer.pushStream(nullptr, 0);
-
-            // Disable WiFi to save power while idle
-            wifiIntentionallyDisabled = true;
-            WiFi.disconnect(true);
-            WiFi.mode(WIFI_OFF);
-            Serial.println("[WiFi] Disabled (idle)");
         }
 
         if (isButtonPressed()) // button pressed
@@ -206,9 +197,9 @@ void loop()
     {
         if (runOnceOnStateChange()) 
         {
-            wsSessionStarted = false;
-            wifiReconnectStartTime = millis();
-
+            if (!webSocket.connect()) {
+                changeState(State::CONNECTING_API);
+            }
             // Start recording immediately without waiting for WiFi
             audioPlayer.play("/button-press.wav");
             screen.displayMessage("Recording audio...");
@@ -217,35 +208,14 @@ void loop()
             minRecordingTimer.start();
             maxRecordingTimer.start();
 
-            // Trigger non-blocking WiFi reconnect in background if needed
-            if (WiFi.status() != WL_CONNECTED) {
-                wifiIntentionallyDisabled = false;
-                WiFi.mode(WIFI_STA);
-                WiFi.begin();
-                Serial.println("[WiFi] Reconnecting in background...");
-            } else {
-                if (webSocket.connect()) {
-                    webSocket.startAudioSession();
-                    wsSessionStarted = true;
-                }
-            }
+            webSocket.startAudioSession();
         } else {
-            // Check if WiFi reconnected in background
-            if (!wsSessionStarted && WiFi.status() == WL_CONNECTED) {
-                Serial.println("[WiFi] Reconnected in background");
-                if (webSocket.connect()) {
-                    webSocket.startAudioSession();
-                    wsSessionStarted = true;
-                }
-            }
-
-            // Send recorded chunks if WebSocket session is active
-            if (wsSessionStarted) {
-                size_t chunkSize;
-                const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
-                if (segment != nullptr) {
-                    webSocket.sendAudio(segment, chunkSize);
-                }
+            // Send one recorded segment if available
+            size_t chunkSize;
+            const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
+    
+            if (segment != nullptr) {
+                webSocket.sendAudio(segment, chunkSize);
             }
         }
 
@@ -270,34 +240,17 @@ void loop()
             recordStopTimer.start();
         } else {
             if (getRecordedState() == RecordedState::SENDING_AUDIO) {
-                // If WiFi/WS hasn't connected yet, wait for background connection (up to 10s timeout)
-                if (!wsSessionStarted) {
-                    if (WiFi.status() == WL_CONNECTED) {
-                        Serial.println("[WiFi] Reconnected in background (sending)");
-                        if (webSocket.connect()) {
-                            webSocket.startAudioSession();
-                            wsSessionStarted = true;
-                        }
-                    } else if (millis() - wifiReconnectStartTime > 10000) {
-                        Serial.println("[WiFi] Reconnection timeout during send");
-                        screen.displayMessage("[SYS] WiFi reconnection failed.");
-                        changeState(State::ERROR);
-                        break;
-                    }
+                // Send one recorded segment if available
+                size_t chunkSize;
+                const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
+        
+                if (segment != nullptr) {
+                    webSocket.sendAudio(segment, chunkSize);
+                } else {
+                    webSocket.endAudioSession();
+                    changeRecordedState(RecordedState::ENDING_AUDIO);
                 }
-
-                if (wsSessionStarted) {
-                    // Drain all recorded segments
-                    size_t chunkSize;
-                    const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
-            
-                    if (segment != nullptr) {
-                        webSocket.sendAudio(segment, chunkSize);
-                    } else {
-                        webSocket.endAudioSession();
-                        changeRecordedState(RecordedState::ENDING_AUDIO);
-                    }
-                }
+                // Blocked state untill websocket receives the end signal
             }
         }
         break;
@@ -343,6 +296,9 @@ void loop()
                 "ESP32_Provisioning"
             );
         }
+        if (WiFi.status() == WL_CONNECTED) {
+            changeState(State::CONNECTED_WIFI);
+        }
         if (isButtonPressed()) {
             changeState(State::CONNECTING_WIFI);
         }
@@ -360,9 +316,6 @@ void loop()
         screen.update();
         webSocket.update();
         powerController.update();
-        // screen.displayMessage("Battery: " + std::to_string(powerController.getBatteryPercentage()) + "%"
-        //     "\nadc: " + std::to_string(analogRead(BUTTON_PIN)));
-        // Serial.printf("Time: %d ,ADC button: %d, MilliVolts: %d\n", millis(), analogRead(BUTTON_PIN), analogReadMilliVolts(BUTTON_PIN));
     }
 
     vTaskDelay(1); // Yield to other tasks
@@ -377,12 +330,8 @@ void setWebSocketCallback() {
         websockets::WebsocketsClient& client, 
         const websockets::WebsocketsMessage& message
     ) {
-        bool IS_BINARY = message.isBinary();
-        
-        
-        if (IS_BINARY) {
-            Serial.print("[WebSocket] Received binary data");
-            Serial.printf(" of length: %d\n", message.length());
+        // --- Binary frame: PCM audio chunk from TTS ---
+        if (message.isBinary()) {
             const std::string& data = message.rawData();
             audioPlayer.pushStream(
                 reinterpret_cast<const uint8_t*>(data.data()),
@@ -391,28 +340,36 @@ void setWebSocketCallback() {
             return;
         }
 
+        // --- Text frame: control signals or displayable text ---
         std::string api_message = message.data().c_str();
         if (api_message.empty()) {
             return;
         } else if (api_message == ENV::TRANSCRIPTION_START) {
             screen.displayMessage("");
         } else if (api_message == ENV::TRANSCRIPTION_END) {
+            // nothing to do
         } else if (api_message == ENV::AI_TEXT_START || api_message == ENV::AI_TTS_START) {
             if (getState() != State::WAITING_AI_RESPONSE) {
                 changeState(State::WAITING_AI_RESPONSE);
             }
         } else if (api_message == ENV::AI_TEXT_END || api_message == ENV::AI_TTS_END) {
+            if (api_message == ENV::AI_TTS_END) {
+                // Push sentinel so PLAY_RESPONSE knows when all audio chunks are played
+                audioPlayer.endStream();
+            }
             ai_text_finished = ai_text_finished || (api_message == ENV::AI_TEXT_END);
-            ai_tts_finished = ai_tts_finished || (api_message == ENV::AI_TTS_END);
+            ai_tts_finished  = ai_tts_finished  || (api_message == ENV::AI_TTS_END);
             if (ai_text_finished && ai_tts_finished) {
                 changeState(State::PLAY_RESPONSE);
                 ai_text_finished = false;
-                ai_tts_finished = false;
+                ai_tts_finished  = false;
             }
         } else {
-            screen.addMessage(api_message);
+            // Transcription words or AI response text — show on screen and Serial
+            Serial.printf("[WS] Text: %s\n", api_message.c_str());
+            // displayMessage replaces (no unbounded string growth → no OOM crash)
+            screen.displayMessage(api_message);
         }
-
     });
 }
 
@@ -434,14 +391,10 @@ void setWifiCallback() {
             changeState(State::ERROR);
             screen.displayMessage("[SYS] Error: BLE provisioning failed : Credentials rejected.");
             break;
-            case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-            if (!wifiIntentionallyDisabled) {
-                Serial.println("[WiFi] Disconnected unexpectedly");
-                changeState(State::ERROR);
-                screen.displayMessage("[SYS] Error: WiFi disconnected.");
-            } else {
-                Serial.println("[WiFi] Disconnected (intentional)");
-            }
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            Serial.println("[WiFi] Disconnected unexpectedly");
+            changeState(State::ERROR);
+            screen.displayMessage("[SYS] Error: WiFi disconnected.");
             break;
         case ARDUINO_EVENT_PROV_END:
             Serial.println("[WiFiProv] Ended");

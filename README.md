@@ -34,6 +34,7 @@ pio run -t upload
 pio run -t uploadfs
 # Access the logs of our esp
 pio device monitor
+# if the 
 ```
 
 Remark: you need to add the **pio path** to the **environment** to use the `"pio"` applet.

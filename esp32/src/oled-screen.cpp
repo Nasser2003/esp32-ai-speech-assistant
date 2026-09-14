@@ -27,7 +27,7 @@ OledScreen128x32::OledScreen128x32(int SDA_PIN, int SCK_PIN, bool animated, int 
 
 void OledScreen128x32::init() {
 	Wire.begin(SDA_PIN, SCK_PIN);
-	display.setRotation(2);
+	display.setRotation(0);
 	display.setTextColor(SSD1306_WHITE);
 
 	if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
@@ -39,6 +39,10 @@ void OledScreen128x32::init() {
 }
 
 void OledScreen128x32::displayMessage(std::string message) {
+	Serial.print("[OLED ORDER] previous message: ");
+	Serial.print(this->currentMessage.c_str());
+	Serial.print("; [OLED ORDER] setting current message: ");
+	Serial.println(message.c_str());
 	// Serial.print("[OLED ORDER] Setting message: ");
 	// Serial.println(message.c_str());
 	this->lastMessage = this->currentMessage;
@@ -47,13 +51,19 @@ void OledScreen128x32::displayMessage(std::string message) {
 	this->textShowEndTime = 0;
 }
 
-void OledScreen128x32::addMessage(std::string message) {
+void OledScreen128x32::addMessage(std::string message, bool forceUpdate) {
+	Serial.print("[OLED ORDER] previous message: ");
+	Serial.print(this->lastMessage.c_str());
+	Serial.print("; [OLED ORDER] adding message: ");
+	Serial.println(message.c_str());
 	// Serial.print("[OLED ORDER] Setting message: ");
 	// Serial.println(message.c_str());
 	uint32_t last_display_duration = this->textShowEndTime - this->textShowStartTime;
 	this->textShowStartTime = millis();
 	this->textShowEndTime = millis() + last_display_duration;
-	// this->lastMessage = this->currentMessage; // TODO check if this is needed, it might break the animation
+	if (forceUpdate) {
+		this->lastMessage = this->currentMessage;
+	}
 	this->currentMessage = this->currentMessage + message;
 	// to sync the animation timer with the new message
 	// this->textShowStartTime = millis() + (textShowEndTime - textShowStartTime);

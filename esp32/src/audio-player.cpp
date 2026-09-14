@@ -1,6 +1,7 @@
 #include "audio-player.h"
 #include "i2s-audio-manager.h"
 
+#include <Arduino.h>
 #include <LittleFS.h>
 
 AudioPlayer::AudioPlayer(I2SAudioManager& manager)
@@ -8,7 +9,8 @@ AudioPlayer::AudioPlayer(I2SAudioManager& manager)
       pcmQueue(nullptr),
       pcmTaskHandle(nullptr),
       streamPlaying(false),
-      streamEnded(false)
+      streamEnded(false),
+      audioPlaying(false)
 {
 }
 
@@ -34,6 +36,7 @@ bool AudioPlayer::init()
     // I2S is now managed by I2SAudioManager.
     // activateTX() will be called before each playback.
 
+    
     // TTS QUEUE
     pcmQueue = xQueueCreate(
         PCM_QUEUE_LENGTH,
@@ -48,14 +51,13 @@ bool AudioPlayer::init()
     }
 
     // TTS TASK
-    BaseType_t result = xTaskCreatePinnedToCore(
+    BaseType_t result = xTaskCreate(
         pcmTaskEntry,
         "PCM_Audio",
-        8192,
+        4096 * 2,  // doubled: i2s_write internals need headroom
         this,
         5,
-        &pcmTaskHandle,
-        1
+        &pcmTaskHandle
     );
 
     if (result != pdPASS) {
@@ -88,7 +90,9 @@ bool AudioPlayer::play(const char* path)
     // Sauter le header WAV
     file.seek(44);
 
-    uint8_t buffer[PCM_CHUNK_SIZE];
+    // Static: avoids 4096-byte stack allocation; play() is always called from main task.
+    // BSS alignment is ≥ 4 bytes, satisfying the int16_t reinterpret_cast below.
+    static uint8_t buffer[PCM_CHUNK_SIZE];
 
     while (file.available()) {
         size_t bytesRead = file.read(buffer, sizeof(buffer));
@@ -117,7 +121,7 @@ bool AudioPlayer::play(const char* path)
 
     file.close();
 
-    Serial.println("Lecture terminée");
+    Serial.println("Playback finished");
     return true;
 }
 
@@ -172,7 +176,6 @@ bool AudioPlayer::pushStream(
 )
 {
     if (!streamPlaying) {
-        Serial.println("Erreur : stream PCM non démarré");
         return false;
     }
 
@@ -180,53 +183,46 @@ bool AudioPlayer::pushStream(
         return false;
     }
 
+    // Static: avoids a 4100-byte stack allocation that would overflow the main
+    // Arduino task stack (~8 KB) when called from the WebSocket callback chain.
+    // Safe because pushStream is always called from the same task (main loop).
+    static AudioChunk chunk;
+
     size_t offset = 0;
-
     while (offset < length) {
+        size_t bytesToCopy = length - offset;
+        if (bytesToCopy > PCM_CHUNK_SIZE) {
+            bytesToCopy = PCM_CHUNK_SIZE;
+        }
+        memcpy(chunk.data, data + offset, bytesToCopy);
+        chunk.length = bytesToCopy;
+        offset += bytesToCopy;
 
-        size_t chunkLength =
-            min(
-                length - offset,
-                PCM_CHUNK_SIZE
+        // Block up to 300 ms waiting for queue space; drop remaining data if full
+        if (xQueueSend(pcmQueue, &chunk, pdMS_TO_TICKS(300)) != pdTRUE) {
+            Serial.printf(
+                "[AudioPlayer] Queue full, dropped %u remaining bytes\n",
+                static_cast<unsigned>(length - offset + bytesToCopy)
             );
-
-        AudioChunk chunk;
-
-        chunk.length = chunkLength;
-
-        memcpy(
-            chunk.data,
-            data + offset,
-            chunkLength
-        );
-
-        // Attendre si la queue est pleine.
-        //
-        // Cela crée naturellement un back-pressure :
-        // si l'ESP32 lit moins vite que le serveur n'envoie,
-        // le thread WebSocket finira par attendre.
-        if (xQueueSend(
-                pcmQueue,
-                &chunk,
-                portMAX_DELAY
-            ) != pdTRUE)
-        {
-            Serial.println("Error sending to PCM queue");
             return false;
         }
-
-        offset += chunkLength;
     }
-
     return true;
 }
 
 
 void AudioPlayer::endStream()
 {
+    // Static sentinel: only the length==0 matters; data[] is ignored by pcmTask.
+    // Static avoids another 4100-byte stack allocation in the callback chain.
+    static AudioChunk sentinel;
+    sentinel.length = 0;
+    if (xQueueSend(pcmQueue, &sentinel, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        Serial.println("[AudioPlayer] endStream: failed to push sentinel (queue full)");
+    } else {
+        Serial.println("[AudioPlayer] endStream: sentinel queued");
+    }
     streamEnded = true;
-
-    Serial.println("End of PCM stream received");
 }
 
 bool AudioPlayer::isAudioPlaying() const
@@ -268,62 +264,45 @@ void AudioPlayer::pcmTaskEntry(void* parameter)
 
 void AudioPlayer::pcmTask()
 {
-    AudioChunk chunk;
+    Serial.println("[PCM] Task started");
+
+    AudioChunk* chunk = static_cast<AudioChunk*>(malloc(sizeof(AudioChunk)));
+
+    if (chunk == nullptr) {
+        Serial.println("[PCM] malloc FAILED — task aborted");
+        vTaskDelete(nullptr);
+        return;
+    }
 
     while (true) {
+        if (xQueueReceive(pcmQueue, chunk, portMAX_DELAY) == pdTRUE) {
 
-        // Attend jusqu'à recevoir un chunk.
-        if (xQueueReceive(
-                pcmQueue,
-                &chunk,
-                portMAX_DELAY
-            ) == pdTRUE)
-        {
+            if (chunk->length == 0) {
+                // Sentinel: the current TTS batch is fully enqueued and played
+                Serial.println("[PCM] Sentinel received — batch done");
+                audioPlaying = false;
+                streamEnded = false; // ready for next session
+                continue;
+            }
+
             audioPlaying = true;
 
-            applyVolume(
-                reinterpret_cast<int16_t*>(chunk.data),
-                chunk.length / sizeof(int16_t)
+            applyVolume(chunk->data, chunk->length / sizeof(int16_t));
+
+            size_t bytesWritten = 0;
+            esp_err_t err = i2s_write(
+                I2S_NUM_0,
+                chunk->data,
+                chunk->length,
+                &bytesWritten,
+                portMAX_DELAY
             );
 
-            size_t offset = 0;
-
-            while (offset < chunk.length) {
-
-                size_t bytesWritten = 0;
-
-                esp_err_t result = i2s_write(
-                    I2S_NUM_0,
-                    chunk.data + offset,
-                    chunk.length - offset,
-                    &bytesWritten,
-                    portMAX_DELAY
-                );
-
-                if (result != ESP_OK) {
-                    Serial.printf(
-                        "Erreur I2S : %d\n",
-                        result
-                    );
-
-                    break;
-                }
-
-                offset += bytesWritten;
+            if (err != ESP_OK) {
+                Serial.printf("[PCM] i2s_write error: %d\n", err);
             }
 
             audioPlaying = false;
-        }
-
-
-        if (
-            streamEnded &&
-            uxQueueMessagesWaiting(pcmQueue) == 0
-        ) {
-            streamPlaying = false;
-            streamEnded = false;
-
-            Serial.println("PCM stream terminé");
         }
     }
 }

@@ -26,12 +26,16 @@ private:
     I2SAudioManager& manager;
 
     // TTS
-    static constexpr size_t PCM_CHUNK_SIZE = 4096;
-    static constexpr size_t PCM_QUEUE_LENGTH = 16;
+    // Chunk size for the PCM FreeRTOS queue.
+    // Kept small (512 B) so the queue footprint stays ~20 KB, leaving enough
+    // contiguous heap (~22 KB+) for ArduinoWebsockets to buffer a binary TTS frame.
+    static constexpr size_t PCM_CHUNK_SIZE = 512;
+    // 40 × 516 B ≈ 20 KB queue — ~640 ms of 16-kHz/16-bit/mono buffering.
+    static constexpr size_t PCM_QUEUE_LENGTH = 40;
 
     struct AudioChunk {
         size_t length;
-        uint8_t data[PCM_CHUNK_SIZE];
+        int16_t data[PCM_CHUNK_SIZE / sizeof(int16_t)];
     };
 
     QueueHandle_t pcmQueue;
