@@ -13,7 +13,7 @@
 #include "websocket-controller.h"
 #include "power-controller.h"
 
-// Variables
+// Controllers
 I2SAudioManager i2sManager(
     ENV::I2S_PINS::BCLK,
     ENV::I2S_PINS::WS,
@@ -27,23 +27,34 @@ SinusPulse blueLedPulse(1, 270);
 WebsocketController webSocket(ENV::API_HOST, ENV::API_PORT, 
     ENV::API_WEBSOCKET_PATH, ENV::RECORDING_START, 
     ENV::RECORDING_END);
-PowerController powerController(ENV::BATTERY_PIN, 1000);
+PowerController powerController(ENV::BATTERY_PIN, ENV::WAKEUP_INTERVAL, ENV::BUTTON_PIN, 1000);
 
 // Timers for state transitions and timeouts
 Timer preInitTimer(10);
 Timer initTimer(2000);
-Timer connectingTimeoutTimer(2000);
+Timer initbatteryTimer(500);
+Timer connectingTimer(500);
+Timer connectingTimeout(2000);
 Timer connectedWifiTimer(500);
 Timer minRecordingTimer(2000);
 Timer maxRecordingTimer(15000);
 Timer recordStopTimer(1000);
+Timer afterAiResponseTimer(1000);
 Timer errorTimer(2000);
-Timer updateTimer(0);
-Timer batteryMeasureTimer(2000);
+Timer enterSleepModeTimer(ENV::SLEEP_TIMEOUT);
+Timer sleepTimeout(2000);
+Timer fetchTimer(2000);
 
+Timer updateTimer(0);
+
+// Variables
 static bool ai_text_finished = false;
 static bool ai_tts_finished = false;
-
+static bool isSleeping = false;
+static EspWakeUpCause WAKE_UP_CAUSE;
+// Varialbe stored in RTC memory (kept even after deep sleep). 
+// If API connection was successful, allow periodic timer wake up for api update
+RTC_DATA_ATTR bool isAPIConnectionSuccessful = false;
 
 // Function declarations
 void setWebSocketCallback();
@@ -52,57 +63,109 @@ bool isButtonPressed();
 
 void setup()
 {
-    changeState(State::INIT);
     Serial.begin(115200);
-    delay(1000);
-    
-    ledcSetup(0, 5000, 8); // to use PWM feature on the led
-    ledcAttachPin(ENV::BLUE_LED, 0); // PWM way to setup pinMode
-    screen.init();
-    preInitTimer.start();
-    // WiFi.setTxPower(WIFI_POWER_8_5dBm); // Set the WiFi transmission power to 8.5 dBm to avoid the brownout effect
-    audioPlayer.setVolume(15);
+
+    // WiFi.setTxPower(WIFI_POWER_8_5dBm); // Set the WiFi transmission power to 8.5 dBm
     setWebSocketCallback();
     setWifiCallback();
-    // Set the attenuation to 11 dB for the battery pin
-    analogReadResolution(12);
-    analogSetPinAttenuation(ENV::BATTERY_PIN, ADC_11db); 
+    
+    analogReadResolution(12); 
+    analogSetPinAttenuation(ENV::BATTERY_PIN, ADC_11db); // Set the attenuation to 11 dB for the battery pin
     pinMode(ENV::BATTERY_PIN, INPUT);
     pinMode(ENV::BUTTON_PIN, INPUT_PULLUP);
+    ledcSetup(0, 5000, 8); // to use PWM feature on the led
+    ledcAttachPin(ENV::BLUE_LED, 0); // PWM way to setup pinMode
 }
 
 void loop()
 {
     switch (getState())
     {
-    case State::INIT:
-        if (preInitTimer.isElapsed() && runOnceOnStateChange()) 
+    case State::NONE:
+        if (runOnceOnStateChange()) 
         {
-            screen.displayMessage("Initializing the AI assistant...");
-            initTimer.start();
+            WAKE_UP_CAUSE = powerController.getWakeUpCause();
+            if (WAKE_UP_CAUSE == EspWakeUpCause::GPIO) 
+            {
+                Serial.println("[WAKEUP] Wakeup cause: GPIO");
+                // Speed up some timers to init esp faster after deep sleep
+                preInitTimer.setDuration(0);
+                initTimer.setDuration(0);
+                initbatteryTimer.setDuration(0);
+                preInitTimer.start();
+            } 
+            else if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) 
+            {
+                Serial.println("[WAKEUP] Wakeup cause: TIMER");
+                preInitTimer.setDuration(0);
+                initTimer.setDuration(0);
+                initbatteryTimer.setDuration(0);
+                connectingTimer.setDuration(0);
+                connectedWifiTimer.setDuration(0);
+                enterSleepModeTimer.setDuration(0);
+                changeState(State::CONNECTING_WIFI);
+                break;
+            } 
+            else 
+            {
+                Serial.println("[WAKEUP] Wakeup cause: RESET");
+                preInitTimer.start();
+            }
+        }
+        if (preInitTimer.isElapsed()) 
+        {
+            changeState(State::INIT);
+        }
+    case State::INIT:
+        if (runOnceOnStateChange()) 
+        {
+            screen.init();
             updateTimer.start();
             if (!audioPlayer.init()) {
                 Serial.println("AudioPlayer initialization failed");
+                screen.displayMessage("[SYS] AudioPlayer initialization failed");
+                changeState(State::ERROR);
             }
+            audioPlayer.setVolume(15);
             audioPlayer.startStream();
+
+            if (WAKE_UP_CAUSE == EspWakeUpCause::RESET) 
+            {
+                screen.displayMessage("Initializing...");
+            }
+            
+            initbatteryTimer.start();
+            initTimer.start();
+        }
+        if (initbatteryTimer.isElapsed()) 
+        {
+            initbatteryTimer.breakIt();
+            std::string batteryPercentage = std::to_string(powerController.getBatteryPercentage());
+            if (WAKE_UP_CAUSE == EspWakeUpCause::RESET) 
+            {
+                screen.addMessage("\nBattery: " + batteryPercentage + "%");
+            }
         }
         if (initTimer.isElapsed()) 
         {
-            changeState(State::BATTERY_MEASURE);
+            changeState(State::CONNECTING_WIFI);
         }
         break;
     case State::CONNECTING_WIFI:
         if (runOnceOnStateChange()) 
         {
+            Serial.print("Wakeup cause: ");
+            Serial.println((int)powerController.getWakeUpCause());
             screen.displayMessage("Connecting to WiFi...");
             WiFi.begin();
-            connectingTimeoutTimer.start();
+            connectingTimeout.start();
+            connectingTimer.start();
         }
-        if (WiFi.status() == WL_CONNECTED) 
+        if (WiFi.status() == WL_CONNECTED && connectingTimer.isElapsed()) 
         {
             changeState(State::CONNECTED_WIFI);
         }
-        if (connectingTimeoutTimer.isElapsed()) 
+        if (connectingTimeout.isElapsed()) 
         {
             changeState(State::CONNECTION_FAILED);
         }
@@ -124,26 +187,35 @@ void loop()
             screen.addMessage("\n v Connected to WiFi!", true);
             connectedWifiTimer.start();
         }
+        if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) 
+        {
+            changeState(State::FETCH_API_UPDATES);
+            break;
+        }
         if (connectedWifiTimer.isElapsed()) 
         {
             changeState(State::CONNECTING_API);
+            break;
         }
         break;
     case State::CONNECTING_API:
         if (runOnceOnStateChange()) 
         {
-            if (webSocket.connect()) {
-                changeState(State::CONNECTED_API);
-                webSocket.disconnect();
-            } else {
-                errorTimer.start();
-                screen.addMessage("\n x Problem connecting to API.", true);
+            errorTimer.start();
+        }
+        if (webSocket.connect()) {
+            changeState(State::CONNECTED_API);
+            webSocket.disconnect();
+            if (WAKE_UP_CAUSE != EspWakeUpCause::TIMER) {
+                isAPIConnectionSuccessful = true;
             }
         }
-        else if (errorTimer.isElapsed()) 
-        {
-            screen.displayMessage("[SYS] Error: failed to connect to API.");
+        if (errorTimer.isElapsed()) {
+            screen.addMessage("\n x Problem connecting to API.", true);
             changeState(State::ERROR);
+            if (WAKE_UP_CAUSE != EspWakeUpCause::TIMER) {
+                isAPIConnectionSuccessful = false;
+            }
         }
         break;
     case State::CONNECTED_API:
@@ -154,55 +226,63 @@ void loop()
         }
         if (connectedWifiTimer.isElapsed()) 
         {
-            changeState(State::BATTERY_MEASURE);
-        }
-        break;
-    case State::BATTERY_MEASURE:
-        if (getLastState() == State::CONNECTED_API) { // skip the battery measurement because we already did it during INIT
             changeState(State::IDLE);
             break;
         }
-
-        if (runOnceOnStateChange())
-        {
-            batteryMeasureTimer.start();
-            std::string batteryPercentage = std::to_string(powerController.getBatteryPercentage());
-            screen.displayMessage("Battery: " + batteryPercentage + "%");
-        }
-        
-        if (batteryMeasureTimer.isElapsed()) {
-            if (getLastState() == State::INIT) {
-                changeState(State::CONNECTING_WIFI);
-            } else {
-                changeState(State::IDLE);
-            }
-        }
-
         break;
     case State::IDLE:
-        if (runOnceOnStateChange()) 
+        if (runOnceOnStateChange())
         {
-            screen.displayMessage("Hold the button to record between 2 and 15 sec.");
+            std::string batteryPercentage = std::to_string(powerController.getBatteryPercentage());
+            screen.displayMessage(
+                "Hold the button to record 2 - 15 seconds.\n\n"
+                "Battery: " + batteryPercentage + "%"
+            );
             ai_text_finished = false;
             ai_tts_finished = false;
             audioPlayer.pushStream(nullptr, 0);
+            WiFi.setSleep(true);
+            enterSleepModeTimer.start();
         }
-
         if (isButtonPressed()) // button pressed
         {
             changeState(State::RECORDING);
+        }
+        if (enterSleepModeTimer.isElapsed()) 
+        {
+            changeState(State::SLEEP_MODE);
+        }
+        break;
+    case State::FETCH_API_UPDATES:
+        if (runOnceOnStateChange())
+        {
+            fetchTimer.start();
+            Serial.println("[STATE] Fetching API updates...");
+            // webSocket.connect();
+            // check for alarm
+            // if alarm available now => init components and run alarm
+            // if ai message available => ...
+        }
+        if (fetchTimer.isElapsed()) {
+            changeState(State::SLEEP_MODE);
         }
         break;
     case State::RECORDING:
     {
         if (runOnceOnStateChange()) 
         {
+            WiFi.setSleep(false);
+            if (!WiFi.isConnected()) {
+                changeState(State::CONNECTING_WIFI);
+                break;
+            }
             if (!webSocket.connect()) {
                 changeState(State::CONNECTING_API);
+                break;
             }
             // Start recording immediately without waiting for WiFi
             audioPlayer.play("/button-press.wav");
-            screen.displayMessage("Recording audio...");
+            screen.displayMessage("[SYS] Recording...");
             recorder.startRecording();
             blueLedPulse.startPulse();
             minRecordingTimer.start();
@@ -265,12 +345,11 @@ void loop()
     case State::PLAY_RESPONSE:
         if (runOnceOnStateChange())
         {
-            
+            afterAiResponseTimer.start();
         }
-        if (!audioPlayer.isAudioPlaying() && audioPlayer.isStreamBufferEmpty())
+        if (!audioPlayer.isAudioPlaying() && audioPlayer.isStreamBufferEmpty() && afterAiResponseTimer.isElapsed())
         {
-            // audioPlayer.endStream();
-            changeState(State::BATTERY_MEASURE);
+            changeState(State::IDLE);
             webSocket.disconnect();
             audioPlayer.play("/ai-end.wav");
         }
@@ -279,14 +358,23 @@ void loop()
         if (runOnceOnStateChange())
         {
             screen.addMessage("\nPress the button to reset.");
+            enterSleepModeTimer.start();
         }
-        if (isButtonPressed()) {
+        if (isButtonPressed() && WAKE_UP_CAUSE != EspWakeUpCause::TIMER) {
             changeState(State::CONNECTING_WIFI);
+        }
+        if (enterSleepModeTimer.isElapsed()) 
+        {
+            changeState(State::SLEEP_MODE);
         }
         break;
     case State::BLE_PROVISIONING:
         if (runOnceOnStateChange())
         {
+            if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
+                changeState(State::ERROR);
+                break;
+            }
             screen.displayMessage("[SYS] BLE prov. mode: Use the app to connect to WiFi. Or press the button to retry.");
             WiFiProv.beginProvision(
                 WIFI_PROV_SCHEME_BLE,
@@ -295,12 +383,32 @@ void loop()
                 "abcd1234",
                 "ESP32_Provisioning"
             );
+            enterSleepModeTimer.start();
         }
         if (WiFi.status() == WL_CONNECTED) {
             changeState(State::CONNECTED_WIFI);
         }
         if (isButtonPressed()) {
             changeState(State::CONNECTING_WIFI);
+        }
+        if (enterSleepModeTimer.isElapsed()) 
+        {
+            changeState(State::SLEEP_MODE);
+        }
+        break;
+    case State::SLEEP_MODE:
+        if (runOnceOnStateChange())
+        {
+            sleepTimeout.start();
+            screen.displayMessage("[SYS] Entering sleep mode...");
+        }
+        if (sleepTimeout.isElapsed())
+        {
+            sleepTimeout.breakIt();
+            if (WAKE_UP_CAUSE != EspWakeUpCause::TIMER) {
+                screen.clear();
+            }
+            powerController.startSleep(isAPIConnectionSuccessful);
         }
         break;
     default:
@@ -345,7 +453,7 @@ void setWebSocketCallback() {
         if (api_message.empty()) {
             return;
         } else if (api_message == ENV::TRANSCRIPTION_START) {
-            screen.displayMessage("");
+            screen.addMessage("\n[SYS] Transcribing...\n");
         } else if (api_message == ENV::TRANSCRIPTION_END) {
             // nothing to do
         } else if (api_message == ENV::AI_TEXT_START || api_message == ENV::AI_TTS_START) {
@@ -365,10 +473,7 @@ void setWebSocketCallback() {
                 ai_tts_finished  = false;
             }
         } else {
-            // Transcription words or AI response text — show on screen and Serial
-            Serial.printf("[WS] Text: %s\n", api_message.c_str());
-            // displayMessage replaces (no unbounded string growth → no OOM crash)
-            screen.displayMessage(api_message);
+            screen.addMessage(api_message);
         }
     });
 }

@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <vector>
-
+#include "esp_sleep.h"
 namespace {
     constexpr int BATTERY_DIVIDER_RATIO = 2;
     // Measurements are grouped into 10 mV buckets.
@@ -16,12 +16,19 @@ namespace {
     constexpr int BUTTON_PRESS_THRESHOLD = 1500;
 }
 
-PowerController::PowerController(int batteryPin, int historySize)
-    : batteryPin(batteryPin), historySize(historySize) {
+
+PowerController::PowerController(int batteryPin, uint32_t periodicAwakeMS, int wakeUpPin,  int historySize)
+    : batteryPin(batteryPin), 
+    historySize(historySize), 
+    periodicAwakeMS(periodicAwakeMS), 
+    wakeUpPin(wakeUpPin) 
+{
     // Initialize the deque with zeros
     for (int i = 0; i < historySize; ++i) {
         adcHistory.push_back(0);
     }
+    // Get the wakeup cause
+    sleepWakeUpCause = esp_sleep_get_wakeup_cause();
 }
 
 int PowerController::getBatteryPercentage() const
@@ -137,11 +144,6 @@ int PowerController::getBatteryPercentage() const
     return (int)((batteryVoltage - 3200) / 10.0f);
 }
 
-
-// --------------------------------------------------
-// Update history
-// --------------------------------------------------
-
 void PowerController::update()
 {
     const int millivolts = readBatteryPercentage();
@@ -153,12 +155,28 @@ void PowerController::update()
     }
 }
 
-
-// --------------------------------------------------
-// Read battery voltage through ADC
-// --------------------------------------------------
-
 int PowerController::readBatteryPercentage() const
 {
     return analogReadMilliVolts(batteryPin);
+}
+
+void PowerController::startSleep(bool enableWakeupTimer) {
+    // set wakeup timer
+    if (enableWakeupTimer) {
+        esp_sleep_enable_timer_wakeup((uint64_t) periodicAwakeMS * 1000ULL);
+    }
+
+    // set wakeup pin
+    esp_deep_sleep_enable_gpio_wakeup(
+        (1ULL << wakeUpPin),
+        ESP_GPIO_WAKEUP_GPIO_LOW
+    );
+
+    Serial.flush();
+
+    esp_deep_sleep_start();
+}
+
+EspWakeUpCause PowerController::getWakeUpCause() const {
+    return static_cast<EspWakeUpCause>(sleepWakeUpCause);
 }
