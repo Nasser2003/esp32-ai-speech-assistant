@@ -21,6 +21,7 @@ enum class State {
     BLE_PROVISIONING,  // When esp is in BLE provisioning mode, waiting for the app to send the wifi credentials
     SLEEP_MODE,  // When esp is in deep sleep mode, waiting for the wakeup timer or button press
     FETCH_API_UPDATES, // When esp is fetching updates from the api (e.g. new messages, new commands, etc.)
+    ALARM_MODE, // When esp is in alarm mode
 
 };
 enum class RecordedState {
@@ -46,6 +47,7 @@ const char* stateToString(State state) {
     case State::BLE_PROVISIONING:  return "BLE_PROVISIONING";
     case State::SLEEP_MODE: return "SLEEP_MODE";
     case State::FETCH_API_UPDATES: return "FETCH_API_UPDATES";
+    case State::ALARM_MODE: return "ALARM_MODE";
     default:                    return "UNKNOWN_STATE";
     }
 }

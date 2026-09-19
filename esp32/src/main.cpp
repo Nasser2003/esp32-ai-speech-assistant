@@ -11,6 +11,7 @@
 #include "state.h"
 #include "env.h"
 #include "websocket-controller.h"
+#include "http-controller.h"
 #include "power-controller.h"
 
 // Controllers
@@ -27,6 +28,7 @@ SinusPulse blueLedPulse(1, 270);
 WebsocketController webSocket(ENV::API_HOST, ENV::API_PORT, 
     ENV::API_WEBSOCKET_PATH, ENV::RECORDING_START, 
     ENV::RECORDING_END);
+HttpController httpController(ENV::API_HOST, ENV::API_PORT);
 PowerController powerController(ENV::BATTERY_PIN, ENV::WAKEUP_INTERVAL, ENV::BUTTON_PIN, 1000);
 
 // Timers for state transitions and timeouts
@@ -44,6 +46,9 @@ Timer errorTimer(2000);
 Timer enterSleepModeTimer(ENV::SLEEP_TIMEOUT);
 Timer sleepTimeout(2000);
 Timer fetchTimer(2000);
+Timer waitingAiTimeout(30000);
+Timer alarmTimeout(30000);
+Timer alarmOverDelay(1000);
 
 Timer updateTimer(0);
 
@@ -60,6 +65,7 @@ RTC_DATA_ATTR bool isAPIConnectionSuccessful = false;
 void setWebSocketCallback();
 void setWifiCallback();
 bool isButtonPressed();
+void initComponents();
 
 void setup()
 {
@@ -119,15 +125,8 @@ void loop()
     case State::INIT:
         if (runOnceOnStateChange()) 
         {
-            screen.init();
             updateTimer.start();
-            if (!audioPlayer.init()) {
-                Serial.println("AudioPlayer initialization failed");
-                screen.displayMessage("[SYS] AudioPlayer initialization failed");
-                changeState(State::ERROR);
-            }
-            audioPlayer.setVolume(15);
-            audioPlayer.startStream();
+            initComponents();
 
             if (WAKE_UP_CAUSE == EspWakeUpCause::RESET) 
             {
@@ -226,8 +225,38 @@ void loop()
         }
         if (connectedWifiTimer.isElapsed()) 
         {
-            changeState(State::IDLE);
+            changeState(State::FETCH_API_UPDATES);
             break;
+        }
+        break;
+    case State::FETCH_API_UPDATES:
+        if (runOnceOnStateChange())
+        {
+            fetchTimer.start();
+            Serial.println("[STATE] Fetching API updates...");
+            Task task;
+            const int statusCode = httpController.getCurrentTask(task);
+            if (statusCode >= 200 && statusCode < 300) {
+                Serial.printf("[STATE] Current task: %s (%s)\n",
+                    task.taskType.c_str(),
+                    task.hasArgument ? task.argument.c_str() : "null");
+            } else {
+                Serial.printf("[STATE] Current task request failed: %d\n", statusCode);
+            }
+            if (task.taskType == "ALARM") {
+                changeState(State::ALARM_MODE);
+                if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
+                    initComponents();
+                    changeState(State::ALARM_MODE);
+                }
+            }
+        }
+        if (fetchTimer.isElapsed()) {
+            if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
+                changeState(State::SLEEP_MODE);
+            } else {
+                changeState(State::IDLE);
+            }
         }
         break;
     case State::IDLE:
@@ -250,20 +279,6 @@ void loop()
         }
         if (enterSleepModeTimer.isElapsed()) 
         {
-            changeState(State::SLEEP_MODE);
-        }
-        break;
-    case State::FETCH_API_UPDATES:
-        if (runOnceOnStateChange())
-        {
-            fetchTimer.start();
-            Serial.println("[STATE] Fetching API updates...");
-            // webSocket.connect();
-            // check for alarm
-            // if alarm available now => init components and run alarm
-            // if ai message available => ...
-        }
-        if (fetchTimer.isElapsed()) {
             changeState(State::SLEEP_MODE);
         }
         break;
@@ -318,6 +333,7 @@ void loop()
             recorder.stopRecording();
             blueLedPulse.stopPulse();
             recordStopTimer.start();
+            waitingAiTimeout.start();
         } else {
             if (getRecordedState() == RecordedState::SENDING_AUDIO) {
                 // Send one recorded segment if available
@@ -333,6 +349,10 @@ void loop()
                 // Blocked state untill websocket receives the end signal
             }
         }
+        if (waitingAiTimeout.isElapsed()) {
+            screen.displayMessage("\n[SYS] Timeout recording stopped.");
+            changeState(State::ERROR);
+        }
         break;
     }
     case State::WAITING_AI_RESPONSE:
@@ -340,18 +360,28 @@ void loop()
         {
             screen.addMessage("\n[SYS] Waiting for AI\n");
             audioPlayer.play("/ai-begin.wav");
+            // waitingAiTimeout.start();
         }
+        // if (waitingAiTimeout.isElapsed()) {
+        //     screen.displayMessage("\n[SYS] Timeout waiting for AI response.");
+        //     changeState(State::ERROR);
+        // }
         break;
     case State::PLAY_RESPONSE:
         if (runOnceOnStateChange())
         {
             afterAiResponseTimer.start();
+            waitingAiTimeout.start();
         }
         if (!audioPlayer.isAudioPlaying() && audioPlayer.isStreamBufferEmpty() && afterAiResponseTimer.isElapsed())
         {
-            changeState(State::IDLE);
+            changeState(State::FETCH_API_UPDATES);
             webSocket.disconnect();
             audioPlayer.play("/ai-end.wav");
+        }
+        if (waitingAiTimeout.isElapsed()) {
+            screen.displayMessage("\n[SYS] Timeout playing AI response.");
+            changeState(State::ERROR);
         }
         break;
     case State::ERROR:
@@ -411,6 +441,29 @@ void loop()
             powerController.startSleep(isAPIConnectionSuccessful);
         }
         break;
+    case State::ALARM_MODE:
+        if (runOnceOnStateChange())
+        {
+            screen.displayMessage("[SYS] Alarm mode: Press the button to stop the alarm.");
+            audioPlayer.play("/alarm.wav");
+            alarmTimeout.start();
+        }
+        if (!audioPlayer.isAudioPlaying() && audioPlayer.isStreamBufferEmpty()) {
+            audioPlayer.play("/alarm.wav");
+        }
+        if (alarmOverDelay.isElapsed()) {
+            audioPlayer.stop();
+            changeState(State::IDLE);
+            break;
+        } else if (isButtonPressed() && alarmTimeout.breakIt()) {
+            screen.addMessage("[SYS] Alarm stopped. Returning to IDLE.");
+            audioPlayer.stop();
+            alarmOverDelay.start();
+        } else if (alarmTimeout.isElapsed()) {
+            screen.addMessage("[SYS] Alarm timeout.");
+            audioPlayer.stop();
+            changeState(State::SLEEP_MODE);
+        }
     default:
         break;
     }
@@ -506,4 +559,15 @@ void setWifiCallback() {
             break;
         }
     });
+}
+
+void initComponents() {
+    screen.init();
+    if (!audioPlayer.init()) {
+        Serial.println("AudioPlayer initialization failed");
+        screen.displayMessage("[SYS] AudioPlayer initialization failed");
+        changeState(State::ERROR);
+    }
+    audioPlayer.setVolume(15);
+    audioPlayer.startStream();
 }

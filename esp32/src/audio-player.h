@@ -11,10 +11,12 @@ public:
 
     bool init();
     bool play(const char* path);
+    void stop();
     bool startStream();
     bool pushStream(const uint8_t* data, size_t length);
     void endStream();
 
+    bool isPlaying() const;
     bool isAudioPlaying() const;
     bool isStreamPlaying() const;
     bool isStreamBufferEmpty() const;
@@ -41,12 +43,23 @@ private:
     QueueHandle_t pcmQueue;
     TaskHandle_t pcmTaskHandle;
 
+    // Producteur "fichier" : partage pcmQueue/pcmTask avec le TTS.
+    static constexpr size_t MAX_PATH_LEN = 64;
+    char filePath[MAX_PATH_LEN];
+    TaskHandle_t filePlaybackTaskHandle;
+
     volatile bool streamPlaying;
     volatile bool streamEnded;
     volatile bool audioPlaying;
+    volatile bool wavPlaying;   // true tant que la tâche fichier pousse des chunks
+    volatile bool stopRequested;
+    volatile bool ttsBusy;
 
     static void pcmTaskEntry(void* parameter);
     void pcmTask();
+
+    static void filePlaybackTaskEntry(void* parameter);
+    void filePlaybackTask();
 
     float volumeGain = 0.3f;
     void applyVolume(int16_t* samples, size_t sampleCount);
