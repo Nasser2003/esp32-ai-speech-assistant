@@ -1,17 +1,17 @@
 from fastapi import WebSocket
 
-from services.redis_controller import RedisController
+from databases.redis_db import RedisDatabase
 from config import (REDIS_KEY_PREFIX_AI_TEXT, SIGNAL_AI_TEXT_START, SIGNAL_AI_TEXT_END)
 from simple_websocket.errors import ConnectionClosed
 
 # purpose: send ai tts audio answer to the client
-async def worker_ai_answer(just_id: str, client_ws: WebSocket, redis_controller : RedisController):
+async def worker_ai_answer(just_id: str, client_ws: WebSocket, redis_db : RedisDatabase):
     try:
         ai_text_key = REDIS_KEY_PREFIX_AI_TEXT + just_id
         
         while True:
-            result = await redis_controller.blpop(ai_text_key)
-            print(f"[AI ANSWER] Result from Redis: {result}")
+            result = await redis_db.blpop(ai_text_key)
+            # print(f"[WORKER AI ANSWER] Result from Redis: {result}")
             if result is None:
                 break
             else:
@@ -30,7 +30,10 @@ async def worker_ai_answer(just_id: str, client_ws: WebSocket, redis_controller 
                 # print(f"[AI ANSWER] Sending AI text answer: {answer_str}")
                 await client_ws.send_text(answer_str)
     except ConnectionClosed as e:
-        print(f"[AI ANSWER] WebSocket closed: {e}")
+        print(f"[WORKER AI ANSWER] WebSocket closed: {e}")
+    
+    except Exception as e:
+        print(f"[WORKER AI ANSWER] Exception occurred: {e}")
 
     finally:
-        print("[AI ANSWER] Worker finished")
+        print("[WORKER AI ANSWER] Worker finished")

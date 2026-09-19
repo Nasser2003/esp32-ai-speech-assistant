@@ -6,16 +6,26 @@ In this document, I will describe each step of developping this project in order
 
 - Use advanced ESP32 features (flash storage, I2C communication, mic, sound, oled screen)
 - Manage complex state machine on ESP32
+- Create an API with FastAPI
 - Deploy my first ai assistant with Ollama and use it in the project
 - Deploy a model that transcripts audio received from the esp32 mic.
 - Learn C++ and make modular code
 - Create web sockets on ESP
 - Stream full-duplex audio and text information between ESP32 and API
 - Use redis database to store in memory data like sessions and audio
-- Use caching with Flask
 - Create async tasks with asyncio
 - Transcribe audio using Whisper from OpenAi
 - Convert text into Speech with Piper
+- Use 2 shared pins between the Mic and Speaker to save pins for other usage on ESP32.
+- Optimize the audio data flow in order to not saturate the limited memory of the esp32
+- learn about how to use Postgres and read about its exclusive features
+- learn about PgAdmin, a GUI tool to managed Postgre, and create a container of it.
+- Managed ai memory context with Postgres and apply other optimizations (conversation summary, keyword search)
+- Integrate battery to make esp32 portable, and measure its remaining capacity in real time with ADC
+- Implement deep sleep mode to save battery, if there is no action for a long time
+- Implement awake events (Button press, plannification, periodic awake to check for new notifications).
+- Create my custom AI image, define the system prompt (Avoid markdown format, give the context, some knowledge)
+- Upgrade my AI model and give it more control to execute orders (Change volume, Sleep, turn on Blue Led, planned alarm)
 
 ## 1. ESP32
 
@@ -42,6 +52,7 @@ Otherwise, we would need to use `"%USERPROFILE%\.platformio\penv\Scripts\platfor
 
 
 ### Battery management
+
 To make the device portable, a 3.7v battery was used + 
 
 ## 2. Ollama
@@ -146,7 +157,20 @@ python3 -m piper.download_voices en_US-ryan-low fr_FR-gilles-low
 
 ## 7. PostGreSQL
 
-A powerful relational database I will use to store the context (chat conversation).
+PostgreSQL is an open-source relational database management system that is known for its robustness, reliability, and advanced features.
+It provides a powerful and scalable platform for managing large volumes of structured data.
+PostgreSQL supports a wide range of data types, indexing options, and query optimization techniques, making it suitable for various apps.
+It offers ACID compliance and supports compliancce and supports transactions, which ensures data integrity and reliability.
+With its extensibility and support for various programming languages,
+PostgreSQL is widely used in enterprise environments and by developers for building high-perf, data-driven apps.
+
+### PgAdmin
+
+PgAdmin is a free and open-source administration and development platform for managing Postgre databases. It provides a graphical user interface (GUI) that allows user to interact with the database and perform various administrative tasks. pgAdmin offers a range of features, including database object management (such as creating tables, views, and indexes), querying and editing data, monitoring database activity, and managing server settings. It provides a user-friendly environment for database administrator and developers to efficiently work with PostgreSQL databases, allowing them to visually design database schemas, write and execute SQL queries, and monitor database performance. PgAdmin is avaialbe for multiple operating systems and is widely used as a primary tool for PostgreSQL database administration.
+
+### Access pgAdmin
+
+Once the podman compose command is up, you can access the `http://<server-ip>:8080/browser/` and connect to postgres based on the credentials stored in `.env`
 
 ## 8. Docker/Podman
 

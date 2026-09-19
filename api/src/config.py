@@ -1,5 +1,5 @@
 import os
-from models.voice_config import VoiceConfig
+from dto.voice_config import VoiceConfig
 
 
 def getenv_checked(var_name: str) -> str:
@@ -20,10 +20,10 @@ API_WEBSOCKET_PATH = getenv_checked("API_WEBSOCKET_PATH")
 OLLAMA_URL = getenv_checked("OLLAMA_URL")
 OLLAMA_CHAT_MODEL = getenv_checked("OLLAMA_CHAT_MODEL")
 
-TRANSCRIPTION_CHUNK_SIZE = 120_000
+TRANSCRIPTION_CHUNK_SIZE = 600000
 TRANSCRIPTION_WINDOW_SIZE = getenv_checked_int("TRANSCRIPTION_WINDOW_SIZE")
 
-TRANSCRIPTION_MODEL = "medium"
+TRANSCRIPTION_MODEL = getenv_checked("TRANSCRIPTION_MODEL")
 
 TTS_CHUNK_SIZE = 2048
 

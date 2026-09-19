@@ -8,3 +8,5 @@ piper-tts[http]
 scipy
 fastapi
 uvicorn
+psycopg[binary]
+sqlalchemy

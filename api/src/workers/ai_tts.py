@@ -3,18 +3,18 @@ from piper import PiperVoice
 from simple_websocket.errors import ConnectionClosed
 
 from services.audio_process_utils import resample_audio
-from services.redis_controller import RedisController
+from databases.redis_db import RedisDatabase
 from config import ( REDIS_KEY_PREFIX_AI_TTS, SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, 
     LANGUAGE_MAP, REDIS_KEY_PREFIX_LANGUAGE, TTS_CHUNK_SIZE )
 
 # purpose: send ai text answer to the client
-async def worker_ai_tts(just_id, client_ws: WebSocket, redis_controller: RedisController): 
+async def worker_ai_tts(just_id, client_ws: WebSocket, redis_db: RedisDatabase): 
     try:
         ai_tts_key = REDIS_KEY_PREFIX_AI_TTS + just_id
         
         while True:
-            result = await redis_controller.blpop(ai_tts_key)
-            print(f"[AI TTS] Result from Redis: {result}")
+            result = await redis_db.blpop(ai_tts_key)
+            # print(f"[AI TTS] Result from Redis: {result}")
             if result is None:
                 continue
             else:
@@ -33,8 +33,8 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_controller: RedisCo
                 break
             else:
                 # Determine the segment language for TTS synthesis
-                lang = await redis_controller.get_majoritary(REDIS_KEY_PREFIX_LANGUAGE + just_id)
-                await redis_controller.setTTL(REDIS_KEY_PREFIX_LANGUAGE + just_id)
+                lang = await redis_db.get_majoritary(REDIS_KEY_PREFIX_LANGUAGE + just_id)
+                await redis_db.setTTL(REDIS_KEY_PREFIX_LANGUAGE + just_id)
                 if lang is None:
                     lang = "en"
                 config = LANGUAGE_MAP.get(lang)
@@ -51,7 +51,10 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_controller: RedisCo
                             await client_ws.send_bytes(audio_bytes[i:i + TTS_CHUNK_SIZE])
 
     except ConnectionClosed as e:
-        print(f"[AI TTS] WebSocket closed: {e}")
+        print(f"[WORKER AI TTS] WebSocket closed: {e}")
+        
+    except Exception as e:
+        print(f"[WORKER AI TTS] Exception occurred: {e}")
 
     finally:
-        print("[AI TTS] Worker finished")
+        print("[WORKER AI TTS] Worker finished")

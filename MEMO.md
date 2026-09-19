@@ -135,3 +135,171 @@ SADD cars citroen
 # 12. Special case for list: blocking pop => waiting until new element is added
 BRPOP orders 0 # -> 0 means wait permanently, even if list deleted!
 ```
+
+## ESP32 saving mode
+
+### Wifi sleep mode
+
+Instead of turning off the wifi, the sleep mode could be useful to reduce the power, and turn on directly when needed.
+
+```cpp
+#include <WiFi.h>
+
+WiFi.setSleep(true)
+// WiFi sleep
+WiFi.setSleep(false)
+```
+
+### Light Sleep mode
+
+The consumption of this mode is arround 600 times lower than the active mode.
+This is the light way to save energy, it freezes the CPU, while keeping the ram and registers.
+To use this mode, we need to define the wakeup condition (gpio activation, timer, or both)
+
+```cpp
+#include "esp_sleep.h"
+
+// wake up conditions
+//  Timer activation
+esp_sleep_enable_timer_wakeup((uint64_t) SLEEP_SECS * 1000000ULL)
+
+//  GPIO activation
+gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_HIGH_LEVEL);
+
+// Flush Serial buffer
+Serial.flush();
+
+// Starting the light sleep mode
+esp_light_sleep_start();
+```
+
+### Deep Sleep mode
+
+The consumption of this mode is arround 16 000 times lower than the active mode.
+Almost everything is powered off (CPU, RAM, GPIO, Register) except for RTC module and RTC memory.
+When ESP32 is waken up from deep sleep mode, it reboots from setup().
+Be aware that for the GPIO activation, only GPIOs having the RTC feature can be used.
+
+Since in this mode, all the variables stored in ram are lost, there is a special memory that can be used:
+RTC memory. On esp32 c3 super mini, 8 000 bytes are available. But they are lost if power off or ESP reset.
+
+```cpp
+#include "esp_sleep.h"
+
+// Create variables stored in RTC Memory (via macro)
+RTC_DATA_ATTR int bootCount = 0;
+
+// We can identify the event that woke up the esp from deep sleep
+esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+
+switch (cause) {
+    case ESP_SLEEP_WAKEUP_TIMER:
+        Serial.println("Wakeup cause: RTC Timer");
+        break;
+    case ESP_SLEEP_WAKEUP_GPIO:
+        Serial.println("Wakeup ause: GPIO");
+        break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD:
+        Serial.println("Wakeup cause: Touch sensor");
+        break;
+    default: // ESP_SLEEP_WAKEUP_UNDEFINED
+        Serial.println("Wakeup cause: Power-on / hard reset");
+        break;
+}
+
+bootCount++;
+Serial.print("Boot: ");
+Serial.println(bootCount);
+
+// Set timer deep sleep condition
+esp_sleep_enable_timer_wakeup((uint64_t) SLEEP_SECS * 1000000ULL);
+
+// Set gpio deep sleep condition
+esp_deep_sleep_enable_gpio_wakeup(
+    (1ULL << wakeUpPin),
+    ESP_GPIO_WAKEUP_GPIO_LOW
+);
+
+Serial.flush();
+
+// start deep sleep
+esp_deep_sleep_start();
+```
+
+### Hibernation mode (advanced deep sleep)
+
+This mode is more restricted than the deep sleep mode because it can be only waken up through RTC pin trigger.
+It does not keep RTC memory.
+
+```cpp
+#include "esp_sleep.h"
+
+#define WAKEUP_PIN GPIO_NUM_5
+
+void enterHibernation()
+{
+    // Wake up when GPIO5 becomes LOW.
+    esp_deep_sleep_enable_gpio_wakeup(
+        1ULL << WAKEUP_PIN,
+        ESP_GPIO_WAKEUP_GPIO_LOW
+    );
+
+    // Turn off RTC FAST memory.
+    // This means RTC_DATA_ATTR variables will NOT survive.
+    esp_sleep_pd_config(
+        ESP_PD_DOMAIN_RTC_FAST_MEM,
+        ESP_PD_OPTION_OFF
+    );
+
+    // Enter the lowest-power deep-sleep configuration possible.
+    Serial.flush();
+    esp_deep_sleep_start();
+}
+```
+
+## PostgreSQL
+
+### Connect to postgre via the container
+
+```bash
+podman compose exec postgres bash
+psql -U admin -d ai_context
+```
+
+### Connect to postgre via pgAdmin container
+
+Go to the link: `http://<server-ip>:8080/browser/` and create a connection to the postgres database.
+
+### RUN Commands in psql
+
+```bash
+# list all databases
+\l
+# list all tables
+\dt
+# clear terminal
+\! clear
+# select database
+```
+
+### Basic commands
+
+WARNING: If you enter commands via the terminal, do not forget to put `;` semicolon at the end in order to be executed.
+
+```sql
+CREATE TABLE IF NOT EXISTS people (
+    id SERIAL PRIMARY KEY,
+    first_name VARCHAR(255) NOT NULL,
+    last_name VARCHAR(255),
+    age INT CHECK(age > 0),
+    job VARCHAR(255),
+    employed BOOL
+);
+
+INSERT INTO people (first_name, last_name, age, job, employed) VALUES 
+    ('Mike', 'Smith', 30, 'Programmer', true),
+    ('Mike2', 'Smith2', 31, 'Doctor', false),
+    ('Mike3', 'Smith3', 32, 'Teacher', true);
+
+SELECT * FROM people;
+```

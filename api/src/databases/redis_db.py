@@ -3,7 +3,7 @@ from collections import Counter
 
 import redis.asyncio as redis
 
-class RedisController:
+class RedisDatabase:
     def __init__(self, host='localhost', port=6379, db=0, ttl=-1):
         self.redis_client = redis.Redis(host=host, port=port, db=db)
         self.ttl = ttl
@@ -15,8 +15,11 @@ class RedisController:
         await self.redis_client.rpush(key, value)
         await self.redis_client.expire(key, ttl if ttl is not None else self.ttl)
     
-    async def blpop(self, key, timeout=0):
-        return await self.redis_client.blpop(key, timeout)
+    async def blpop(self, key, timeout=-1):
+        _timeout = timeout
+        if timeout == -1:
+            _timeout = self.ttl if self.ttl > 0 else 0
+        return await self.redis_client.blpop(key, _timeout*10)
     
     async def lpop(self, key):
         return await self.redis_client.lpop(key)

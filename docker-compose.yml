@@ -63,9 +63,23 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
+      - ./postgres/init:/docker-entrypoint-initdb.d
     networks:
       - esp-ai-network
+
+  pgadmin:
+    image: docker.io/dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - esp-ai-network
+    depends_on:
+      - postgres
 
   redis:
     image: docker.io/library/redis:8
@@ -80,3 +94,4 @@ networks:
 # Create storage containers for Postgres and Redis data
 volumes:
   postgres_data:
+  pgadmin_data:
