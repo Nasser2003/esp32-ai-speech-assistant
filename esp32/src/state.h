@@ -23,6 +23,7 @@ enum class State {
     FETCH_API_UPDATES, // When esp is fetching updates from the api (e.g. new messages, new commands, etc.)
     ALARM_MODE, // When esp is in alarm mode
     CHANGE_VOLUME, // When esp is changing the audio volume
+    AI_RINGSTONE, // When esp is ringing because the ai has a message for the user
 
 };
 enum class RecordedState {
@@ -50,6 +51,7 @@ const char* stateToString(State state) {
     case State::FETCH_API_UPDATES: return "FETCH_API_UPDATES";
     case State::ALARM_MODE: return "ALARM_MODE";
     case State::CHANGE_VOLUME: return "CHANGE_VOLUME";
+    case State::AI_RINGSTONE: return "AI_RINGSTONE";
     default:                    return "UNKNOWN_STATE";
     }
 }

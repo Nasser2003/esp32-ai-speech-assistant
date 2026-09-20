@@ -9,9 +9,7 @@ public:
     WebsocketController(
         const char* host, 
         uint16_t port, 
-        const char* path, 
-        const char* RECORDING_START, 
-        const char* RECORDING_END
+        const char* path
     );
 
     bool connect();
@@ -20,13 +18,11 @@ public:
 
     void update();
 
-    bool startAudioSession();
+    bool sendMessage(const char* message);
     
     bool sendAudio(const uint8_t* data, size_t size);
 
     void setMessageCallback(const websockets::MessageCallback& callback);
-
-    bool endAudioSession();
 private:
     websockets::WebsocketsClient client;
     const char* host;

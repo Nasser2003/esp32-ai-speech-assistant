@@ -28,9 +28,7 @@ AudioPlayer audioPlayer(i2sManager);
 OledScreen128x32 screen(ENV::SCREEN_PINS::SDA, ENV::SCREEN_PINS::SCK, true, 150);
 AudioRecorder recorder(i2sManager);
 SinusPulse blueLedPulse(1, 270);
-WebsocketController webSocket(ENV::API_HOST, ENV::API_PORT, 
-    ENV::API_WEBSOCKET_PATH, ENV::RECORDING_START, 
-    ENV::RECORDING_END);
+WebsocketController webSocket(ENV::API_HOST, ENV::API_PORT, ENV::API_WEBSOCKET_PATH);
 HttpController httpController(ENV::API_HOST, ENV::API_PORT);
 PowerController powerController(ENV::BATTERY_PIN, ENV::WAKEUP_INTERVAL, ENV::BUTTON_PIN, 1000);
 
@@ -52,7 +50,7 @@ Timer fetchTimer(2000);
 Timer waitingAiTimeout(30000);
 Timer alarmTimeout(5000);
 Timer alarmOverDelay(1000);
-Timer changeVolumeTimer(1000);
+Timer changeVolumeTimer(2000);
 
 Timer updateTimer(0);
 
@@ -310,11 +308,10 @@ void loop()
                 changeState(State::ALARM_MODE);
                 break;
             case TaskType::CHANGE_VOLUME:
-                if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
-                    changeState(State::SLEEP_MODE);
-                } else {
-                    changeState(State::CHANGE_VOLUME);
-                }
+                changeState(State::CHANGE_VOLUME);
+                break;
+            case TaskType::WAKE_UP_AI:
+                changeState(State::AI_RINGSTONE);
                 break;
             default:
                 break;
@@ -372,7 +369,7 @@ void loop()
             minRecordingTimer.start();
             maxRecordingTimer.start();
 
-            webSocket.startAudioSession();
+            webSocket.sendMessage(ENV::RECORDING_START);
         } else {
             // Send one recorded segment if available
             size_t chunkSize;
@@ -412,7 +409,7 @@ void loop()
                 if (segment != nullptr) {
                     webSocket.sendAudio(segment, chunkSize);
                 } else {
-                    webSocket.endAudioSession();
+                    webSocket.sendMessage(ENV::RECORDING_END);
                     changeRecordedState(RecordedState::ENDING_AUDIO);
                 }
                 // Blocked state untill websocket receives the end signal
@@ -570,13 +567,39 @@ void loop()
         if (runOnceOnStateChange())
         {
             const char* volumeStr = currentTask.argument.c_str();
-            screen.displayMessage("[SYS] Changing volume to:\n " + std::string(volumeStr) + "%");
+            screen.displayMessage("[SYS] Changing volume to: " + std::string(volumeStr) + "%");
             audioPlayer.setVolume(atoi(volumeStr));
+            httpController.updateTask();
             changeVolumeTimer.start();
         }
         if (changeVolumeTimer.isElapsed()) {
             changeState(State::IDLE);
         }
+        break;
+    case State::AI_RINGSTONE:
+        if (runOnceOnStateChange())
+        {
+            screen.displayMessage("[SYS] AI has a message for you!\nPress to listen.");
+            audioPlayer.play("/ringstone-1.wav");
+            alarmTimeout.start();
+        }
+        if (alarmOverDelay.isElapsed()) {
+            httpController.updateTask();
+            String message = String(ENV::AI_WAKE_UP) + ":" + currentTask.argument;
+            webSocket.sendMessage(message.c_str());
+            changeState(State::WAITING_AI_RESPONSE);
+        } else if (isButtonPressed() && alarmOverDelay.isNotStarted()) {
+            audioPlayer.stop();
+            screen.addMessage("[SYS] Ringstone stopped. Waiting for AI response.");
+            alarmOverDelay.start();
+        } else if (alarmTimeout.isElapsed()) {
+            screen.addMessage("[SYS] Ringstone timeout.");
+            audioPlayer.stop();
+            changeState(State::SLEEP_MODE);
+        } else if (!audioPlayer.isAudioPlaying() && alarmOverDelay.isNotStarted()) {
+            audioPlayer.play("/ringstone-1.wav");
+        }
+        break;
     default:
         break;
     }

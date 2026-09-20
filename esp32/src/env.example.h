@@ -16,9 +16,11 @@ struct ENV { // constexpr + const => mendatory for char* type, optional for int 
     static constexpr const char* AI_TEXT_END = "/AI TEXT END";
     static constexpr const char* AI_TTS_START = "/AI TTS START";
     static constexpr const char* AI_TTS_END = "/AI TTS END";
+    static constexpr const char* AI_WAKE_UP = "/AI WAKE UP";
 
     // constants
-    static constexpr const int WAKEUP_INTERVAL = 60000; // seconds
+    static constexpr const int WAKEUP_INTERVAL = 10000; // seconds
+    static constexpr const int SLEEP_TIMEOUT = 30000; // seconds
 
     // Pins
     static constexpr const int BUTTON_PIN = 5;

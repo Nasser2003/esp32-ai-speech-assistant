@@ -4,15 +4,11 @@
 WebsocketController::WebsocketController(
     const char* host, 
     uint16_t port, 
-    const char* path, 
-    const char* RECORDING_START, 
-    const char* RECORDING_END
+    const char* path
 )
 : host(host), 
 port(port), 
-path(path), 
-RECORDING_START(RECORDING_START), 
-RECORDING_END(RECORDING_END) {}
+path(path) {}
 
 bool WebsocketController::connect()
 {
@@ -25,12 +21,12 @@ void WebsocketController::disconnect()
     client.close();
 }
 
-bool WebsocketController::startAudioSession()
+bool WebsocketController::sendMessage(const char* message)
 {
-    Serial.print("[WebsocketController] Starting audio session: ");
-    Serial.println(RECORDING_START);
+    Serial.print("[WebsocketController] sending message: ");
+    Serial.println(message);
 
-    return client.send(RECORDING_START);
+    return client.send(message);
 }
 
 void WebsocketController::update()
@@ -56,12 +52,4 @@ bool WebsocketController::sendAudio(const uint8_t* data, size_t size)
 
 void WebsocketController::setMessageCallback(const websockets::MessageCallback& callback) {
     client.onMessage(callback);
-}
-
-bool WebsocketController::endAudioSession()
-{
-    Serial.print("[WebsocketController] Ending audio session: ");
-    Serial.println(RECORDING_END);
-
-    return client.send(RECORDING_END);
 }
