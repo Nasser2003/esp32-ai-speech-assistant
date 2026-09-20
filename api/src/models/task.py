@@ -27,6 +27,7 @@ class TaskStatus(Base):
 class Task(Base):
     __tablename__ = "TASKS"
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    device: Mapped[str] = mapped_column(String(31), nullable=False)
     run_at: Mapped[datetime] = mapped_column(nullable=False)
     type: Mapped[TaskTypeEnum] = mapped_column(SQLEnum(TaskTypeEnum), nullable=False)
     status: Mapped[TaskStatusEnum] = mapped_column(SQLEnum(TaskStatusEnum), nullable=False)

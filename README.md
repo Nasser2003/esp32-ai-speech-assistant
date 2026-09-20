@@ -25,7 +25,8 @@ In this document, I will describe each step of developping this project in order
 - Implement deep sleep mode to save battery, if there is no action for a long time
 - Implement awake events (Button press, plannification, periodic awake to check for new notifications).
 - Create my custom AI image, define the system prompt (Avoid markdown format, give the context, some knowledge)
-- Upgrade my AI model and give it more control to execute orders (Change volume, Sleep, turn on Blue Led, planned alarm)
+- Implement LLM function calling in order to upgrade my model capacity to execute orders
+    (Change volume, Sleep, turn on Blue Led, planned alarm, wake up ai)
 
 ## 1. ESP32
 

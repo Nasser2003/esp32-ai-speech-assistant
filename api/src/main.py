@@ -52,11 +52,11 @@ def ask(question: Question):
 
 
 @app.get("/current-task")
-def get_current_task(db: postgres_dep):
-
+def get_current_task(db: postgres_dep, mac_address: str):
     task = (
         db.query(Task)
-        .filter(Task.type == TaskTypeEnum.ALARM)
+        .filter(Task.device == mac_address) # target esp device
+        .filter(Task.type == TaskTypeEnum.ALARM) # 
         .filter(Task.status == TaskStatusEnum.PENDING)
         .filter(Task.run_at <= datetime.now(timezone.utc))
         .order_by(Task.run_at.asc())
@@ -70,7 +70,7 @@ def get_current_task(db: postgres_dep):
         "id": task.id,
         "task_type": task.type,
         "run_at": task.run_at,
-        "argument": task.argument
+        "argument": task.argument == None and "" or task.argument
     }
     
 @app.patch("/tasks/{task_id}")

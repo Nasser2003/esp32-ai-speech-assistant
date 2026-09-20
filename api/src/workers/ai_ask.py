@@ -40,17 +40,17 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
                 question += f"{text} "
                 await client_ws.send_text(text)
         
-        await redis_db.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_START)
         await redis_db.r_push_expire(ai_text_key, SIGNAL_AI_TEXT_START)
+        await redis_db.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_START)
         
         async for sentense in ask_ai(client_ia, OLLAMA_CHAT_MODEL, question):
             if sentense and sentense.strip():
                 print(f"[WORKER AI ASK] AI answer: {sentense}")
-                await redis_db.r_push_expire(ai_tts_key, sentense)
                 await redis_db.r_push_expire(ai_text_key, sentense)
+                await redis_db.r_push_expire(ai_tts_key, sentense)
             
-        await redis_db.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_END)
         await redis_db.r_push_expire(ai_text_key, SIGNAL_AI_TEXT_END)
+        await redis_db.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_END)
     except ConnectionClosed as e:
         print(f"[WORKER AI ASK] WebSocket closed: {e}")
 
