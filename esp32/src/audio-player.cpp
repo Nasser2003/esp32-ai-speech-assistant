@@ -3,15 +3,21 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <cstring>
 
 AudioPlayer::AudioPlayer(I2SAudioManager& manager)
     : manager(manager),
       pcmQueue(nullptr),
       pcmTaskHandle(nullptr),
+      filePlaybackTaskHandle(nullptr),
       streamPlaying(false),
       streamEnded(false),
-      audioPlaying(false)
+      audioPlaying(false),
+      wavPlaying(false),
+      stopRequested(false),
+      ttsBusy(false)
 {
+    filePath[0] = '\0';
 }
 
 bool AudioPlayer::init()
@@ -23,120 +29,171 @@ bool AudioPlayer::init()
         return false;
     }
 
+    Serial.printf("Flash: %u MB\n", ESP.getFlashChipSize() / (1024 * 1024));
+    Serial.printf("PSRAM: %u MB\n", ESP.getPsramSize() / (1024 * 1024));
+
+    const size_t total = LittleFS.totalBytes();
+    const size_t used  = LittleFS.usedBytes();
+    const size_t free  = total - used;
+
+    Serial.println("========== LittleFS ==========");
     Serial.printf(
-        "Flash: %u MB\n",
-        ESP.getFlashChipSize() / (1024 * 1024)
+        "Total : %u bytes (%.2f MiB)\n",
+        total,
+        total / 1024.0 / 1024.0
     );
-
     Serial.printf(
-        "PSRAM: %u MB\n",
-        ESP.getPsramSize() / (1024 * 1024)
+        "Used  : %u bytes (%.2f MiB) - %.1f%%\n",
+        used,
+        used / 1024.0 / 1024.0,
+        total > 0 ? (used * 100.0 / total) : 0.0
     );
-
-    // I2S is now managed by I2SAudioManager.
-    // activateTX() will be called before each playback.
-
-    
-    // TTS QUEUE
-    pcmQueue = xQueueCreate(
-        PCM_QUEUE_LENGTH,
-        sizeof(AudioChunk)
+    Serial.printf(
+        "Free  : %u bytes (%.2f MiB) - %.1f%%\n",
+        free,
+        free / 1024.0 / 1024.0,
+        total > 0 ? (free * 100.0 / total) : 0.0
     );
+    Serial.println("==============================");
+
+    pcmQueue = xQueueCreate(PCM_QUEUE_LENGTH, sizeof(AudioChunk));
 
     if (pcmQueue == nullptr) {
-        Serial.println(
-            "Error : impossible to create PCM queue"
-        );
+        Serial.println("Error : impossible to create PCM queue");
         return false;
     }
 
-    // TTS TASK
     BaseType_t result = xTaskCreate(
-        pcmTaskEntry,
-        "PCM_Audio",
-        4096 * 2,  // doubled: i2s_write internals need headroom
-        this,
-        5,
-        &pcmTaskHandle
+        pcmTaskEntry, "PCM_Audio", 4096 * 2, this, 5, &pcmTaskHandle
     );
 
     if (result != pdPASS) {
-        Serial.println(
-            "Error : impossible to create PCM_Audio"
-        );
+        Serial.println("Error : impossible to create PCM_Audio");
         return false;
     }
 
     Serial.println("AudioPlayer ready");
-
     return true;
 }
 
+// ======================================================
+// FILE PLAYBACK — streamé via la même queue/tâche que le TTS
+// ======================================================
+
 bool AudioPlayer::play(const char* path)
 {
-    // Ensure TX mode is active before playing
+    if (path == nullptr || wavPlaying || ttsBusy) {
+        return false;
+    }
+
+    if (!LittleFS.exists(path)) {
+        Serial.printf("WAV not found: %s\n", path);
+        return false;
+    }
+
     if (!manager.activateTX()) {
         Serial.println("[AudioPlayer] Failed to activate I2S TX");
         return false;
     }
 
-    File file = LittleFS.open(path, "r");
+    strncpy(filePath, path, MAX_PATH_LEN - 1);
+    filePath[MAX_PATH_LEN - 1] = '\0';
 
-    if (!file) {
-        Serial.printf("WAV not found: %s\n", path);
+    stopRequested = false;
+    wavPlaying = true;
+
+    xQueueReset(pcmQueue);
+
+    BaseType_t result = xTaskCreate(
+        filePlaybackTaskEntry, "WAV_File", 4096, this, 4, &filePlaybackTaskHandle
+    );
+
+    if (result != pdPASS) {
+        Serial.println("[AudioPlayer] Failed to create WAV_File task");
+        wavPlaying = false;
         return false;
     }
 
-    // Sauter le header WAV
-    file.seek(44);
+    return true; // retourne immédiatement, la lecture se fait en tâche de fond
+}
 
-    // Static: avoids 4096-byte stack allocation; play() is always called from main task.
-    // BSS alignment is ≥ 4 bytes, satisfying the int16_t reinterpret_cast below.
-    static uint8_t buffer[PCM_CHUNK_SIZE];
+void AudioPlayer::filePlaybackTaskEntry(void* parameter)
+{
+    AudioPlayer* player = static_cast<AudioPlayer*>(parameter);
+    player->filePlaybackTask();
+    vTaskDelete(nullptr);
+}
 
-    while (file.available()) {
-        size_t bytesRead = file.read(buffer, sizeof(buffer));
+void AudioPlayer::filePlaybackTask()
+{
+    File file = LittleFS.open(filePath, "r");
 
-        applyVolume(
-            reinterpret_cast<int16_t*>(buffer),
-            bytesRead / sizeof(int16_t)
+    if (!file) {
+        Serial.printf("[AudioPlayer] Cannot open %s\n", filePath);
+        wavPlaying = false;
+        return;
+    }
+
+    file.seek(44); // skip WAV header
+
+    AudioChunk chunk;
+
+    while (file.available() && !stopRequested) {
+        chunk.length = file.read(
+            reinterpret_cast<uint8_t*>(chunk.data),
+            PCM_CHUNK_SIZE
         );
 
-        size_t bytesWritten = 0;
+        if (chunk.length == 0) {
+            break;
+        }
 
-        esp_err_t result = i2s_write(
-            I2S_NUM_0,
-            buffer,
-            bytesRead,
-            &bytesWritten,
-            portMAX_DELAY
-        );
+        // Attente bornée + re-check stopRequested : évite de bloquer
+        // indéfiniment si stop() reset la queue pendant l'attente.
+        while (xQueueSend(pcmQueue, &chunk, pdMS_TO_TICKS(200)) != pdTRUE) {
+            if (stopRequested) {
+                break;
+            }
+        }
 
-        if (result != ESP_OK) {
-            Serial.printf("Erreur I2S: %d\n", result);
-            file.close();
-            return false;
+        if (stopRequested) {
+            break;
         }
     }
 
     file.close();
 
-    Serial.println("Playback finished");
-    return true;
+    // Sentinelle : signale la fin du fichier à pcmTask()
+    chunk.length = 0;
+    xQueueSend(pcmQueue, &chunk, pdMS_TO_TICKS(500));
+
+    Serial.println(stopRequested ? "Playback stopped" : "Playback finished");
+    wavPlaying = false;
+}
+
+void AudioPlayer::stop()
+{
+    stopRequested = true;
+    i2s_zero_dma_buffer(I2S_NUM_0);
+
+    if (pcmQueue != nullptr) {
+        xQueueReset(pcmQueue);
+    }
+
+    audioPlaying = false;
+    streamPlaying = false;
+    // wavPlaying repasse à false tout seul quand filePlaybackTask() se termine.
 }
 
 void AudioPlayer::setVolume(uint8_t volume) {
-    // volume attendu 0-100, converti en gain 0.0-1.0
     volumeGain = static_cast<float>(volume) / 100.0f;
 }
 
 void AudioPlayer::applyVolume(int16_t* samples, size_t sampleCount) {
     for (size_t i = 0; i < sampleCount; ++i) {
         int32_t scaled = static_cast<int32_t>(samples[i] * volumeGain);
-
         if (scaled > INT16_MAX) scaled = INT16_MAX;
         if (scaled < INT16_MIN) scaled = INT16_MIN;
-
         samples[i] = static_cast<int16_t>(scaled);
     }
 }
@@ -147,49 +204,46 @@ void AudioPlayer::applyVolume(int16_t* samples, size_t sampleCount) {
 
 bool AudioPlayer::startStream()
 {
-    if (streamPlaying) {
-        Serial.println("Stream déjà actif");
+    if (wavPlaying) {
+        Serial.println("Stream déjà actif (ou fichier en cours)");
         return false;
     }
 
-    // Ensure TX mode is active before streaming
     if (!manager.activateTX()) {
         Serial.println("[AudioPlayer] Failed to activate I2S TX for stream");
         return false;
     }
 
-    // On vide les éventuels anciens chunks.
     xQueueReset(pcmQueue);
 
     streamEnded = false;
+    stopRequested = false;
     streamPlaying = true;
 
     Serial.println("PCM stream démarré");
-
     return true;
 }
 
-
-bool AudioPlayer::pushStream(
-    const uint8_t* data,
-    size_t length
-)
+bool AudioPlayer::pushStream(const uint8_t* data, size_t length)
 {
-    if (!streamPlaying) {
+    if (!streamPlaying || wavPlaying) {
         return false;
     }
+
+    ttsBusy = true;
 
     if (data == nullptr || length == 0) {
         return false;
     }
 
-    // Static: avoids a 4100-byte stack allocation that would overflow the main
-    // Arduino task stack (~8 KB) when called from the WebSocket callback chain.
-    // Safe because pushStream is always called from the same task (main loop).
     static AudioChunk chunk;
 
     size_t offset = 0;
     while (offset < length) {
+        if (stopRequested) {
+            return false;
+        }
+
         size_t bytesToCopy = length - offset;
         if (bytesToCopy > PCM_CHUNK_SIZE) {
             bytesToCopy = PCM_CHUNK_SIZE;
@@ -198,7 +252,6 @@ bool AudioPlayer::pushStream(
         chunk.length = bytesToCopy;
         offset += bytesToCopy;
 
-        // Block up to 300 ms waiting for queue space; drop remaining data if full
         if (xQueueSend(pcmQueue, &chunk, pdMS_TO_TICKS(300)) != pdTRUE) {
             Serial.printf(
                 "[AudioPlayer] Queue full, dropped %u remaining bytes\n",
@@ -210,11 +263,8 @@ bool AudioPlayer::pushStream(
     return true;
 }
 
-
 void AudioPlayer::endStream()
 {
-    // Static sentinel: only the length==0 matters; data[] is ignored by pcmTask.
-    // Static avoids another 4100-byte stack allocation in the callback chain.
     static AudioChunk sentinel;
     sentinel.length = 0;
     if (xQueueSend(pcmQueue, &sentinel, pdMS_TO_TICKS(1000)) != pdTRUE) {
@@ -225,42 +275,26 @@ void AudioPlayer::endStream()
     streamEnded = true;
 }
 
-bool AudioPlayer::isAudioPlaying() const
-{
-    return audioPlaying;
-}
-
-
-bool AudioPlayer::isStreamPlaying() const
-{
-    return streamPlaying;
-}
-
+bool AudioPlayer::isPlaying() const { return wavPlaying || ttsBusy || audioPlaying; }
+bool AudioPlayer::isAudioPlaying() const { return isPlaying(); }
+bool AudioPlayer::isStreamPlaying() const { return streamPlaying; }
 
 bool AudioPlayer::isStreamBufferEmpty() const
 {
-    if (pcmQueue == nullptr) {
-        return true;
-    }
-
+    if (pcmQueue == nullptr) return true;
     return uxQueueMessagesWaiting(pcmQueue) == 0;
 }
 
-
 // ======================================================
-// PCM TASK
+// PCM TASK — consommateur unique : fichiers ET stream TTS
 // ======================================================
 
 void AudioPlayer::pcmTaskEntry(void* parameter)
 {
-    AudioPlayer* player =
-        static_cast<AudioPlayer*>(parameter);
-
+    AudioPlayer* player = static_cast<AudioPlayer*>(parameter);
     player->pcmTask();
-
     vTaskDelete(nullptr);
 }
-
 
 void AudioPlayer::pcmTask()
 {
@@ -278,24 +312,20 @@ void AudioPlayer::pcmTask()
         if (xQueueReceive(pcmQueue, chunk, portMAX_DELAY) == pdTRUE) {
 
             if (chunk->length == 0) {
-                // Sentinel: the current TTS batch is fully enqueued and played
                 Serial.println("[PCM] Sentinel received — batch done");
+                i2s_zero_dma_buffer(I2S_NUM_0);
                 audioPlaying = false;
-                streamEnded = false; // ready for next session
+                streamEnded = false;
+                ttsBusy = false;
                 continue;
             }
 
             audioPlaying = true;
-
             applyVolume(chunk->data, chunk->length / sizeof(int16_t));
 
             size_t bytesWritten = 0;
             esp_err_t err = i2s_write(
-                I2S_NUM_0,
-                chunk->data,
-                chunk->length,
-                &bytesWritten,
-                portMAX_DELAY
+                I2S_NUM_0, chunk->data, chunk->length, &bytesWritten, portMAX_DELAY
             );
 
             if (err != ESP_OK) {
@@ -306,28 +336,3 @@ void AudioPlayer::pcmTask()
         }
     }
 }
-
-// EXAMPLE
-// I2SAudioManager i2sManager(18, 17, 40, 39);
-// AudioPlayer audioPlayer(i2sManager);
-
-// void setup() {
-//     Serial.begin(115200);
-//     delay(1000);
-
-//     if (!audioPlayer.init()) {
-//         Serial.println("AudioPlayer initialization failed");
-
-//         while (true) {
-//             delay(1000);
-//         }
-//     }
-    
-//     audioPlayer.setVolume(10);
-
-//     audioPlayer.play("/the_perfect_christmas.wav");
-// }
-
-// void loop() {
-//     vTaskDelay(1);
-// }

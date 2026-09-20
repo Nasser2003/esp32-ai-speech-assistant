@@ -43,6 +43,8 @@ We have some basic commands
 pio run -t upload
 # Upload files in "/data"
 pio run -t uploadfs
+# erase fs content
+pio run -t erase -e esp32c3
 # Access the logs of our esp
 pio device monitor
 # if the 

@@ -23,9 +23,14 @@ OledScreen128x32::OledScreen128x32(int SDA_PIN, int SCK_PIN, bool animated, int 
 	textShowStartTime = 0;
 	scrollOffset = 0;
 	lastScrollTime = 0;
+	initialized = false;
 }
 
 void OledScreen128x32::init() {
+    if (initialized) {
+        return;
+    }
+	initialized = true;
 	Wire.begin(SDA_PIN, SCK_PIN);
 	display.setRotation(0);
 	display.setTextColor(SSD1306_WHITE);
@@ -39,6 +44,10 @@ void OledScreen128x32::init() {
 }
 
 void OledScreen128x32::displayMessage(std::string message) {
+	if (!initialized) {
+		Serial.println("[OLED] Warning: displayMessage() called before init()");
+		return;
+	}
 	Serial.print("[OLED ORDER] previous message: ");
 	Serial.print(this->currentMessage.c_str());
 	Serial.print("; [OLED ORDER] setting current message: ");
@@ -52,6 +61,10 @@ void OledScreen128x32::displayMessage(std::string message) {
 }
 
 void OledScreen128x32::addMessage(std::string message, bool forceUpdate) {
+	if (!initialized) {
+		Serial.println("[OLED] Warning: addMessage() called before init()");
+		return;
+	}
 	Serial.print("[OLED ORDER] previous message: ");
 	Serial.print(this->lastMessage.c_str());
 	Serial.print("; [OLED ORDER] adding message: ");
@@ -70,6 +83,10 @@ void OledScreen128x32::addMessage(std::string message, bool forceUpdate) {
 }
 
 void OledScreen128x32::update() {
+	// if (!initialized) {
+	// 	Serial.println("[OLED] Warning: update() called before init()");
+	// 	return;
+	// }
 	bool sameMessage = this->currentMessage == this->lastMessage;
 	if (sameMessage) {
 		return;
@@ -164,53 +181,44 @@ std::string OledScreen128x32::normalizeText(const std::string& text) {
         // UTF-8 : caractères accentués français
         if (c == 0xC3 && i + 1 < text.length()) {
             unsigned char next = text[++i];
-
+			
             switch (next) {
-                case 0xA0: // à
-                case 0xA2: // â
-                case 0xA4: // ä
-                    result += 'a';
-                    break;
-
-                case 0xA7: // ç
-                    result += 'c';
-                    break;
-
-                case 0xA8: // è
-                case 0xA9: // é
-                case 0xAA: // ê
-                case 0xAB: // ë
-                    result += 'e';
-                    break;
-
-                case 0xAE: // î
-                case 0xAF: // ï
-                    result += 'i';
-                    break;
-
-                case 0xB4: // ô
-                case 0xB6: // ö
-                    result += 'o';
-                    break;
-
-                case 0xB9: // ù
-                case 0xBB: // û
-                case 0xBC: // ü
-                    result += 'u';
-                    break;
-
-                case 0xBF: // ÿ
-                    result += 'y';
-                    break;
-
-                default:
-                    result += '?';
-                    break;
+                case 0xA0: case 0xA2: case 0xA4: result += 'a'; break; // à â ä
+                case 0x80: case 0x82: case 0x84: result += 'A'; break; // À Â Ä
+                case 0xA8: case 0xA9: case 0xAA: case 0xAB: result += 'e'; break; // è é ê ë
+                case 0x88: case 0x89: case 0x8A: case 0x8B: result += 'E'; break; // È É Ê Ë
+                case 0xAE: case 0xAF: result += 'i'; break; // î ï
+                case 0x8E: case 0x8F: result += 'I'; break; // Î Ï
+                case 0xB4: case 0xB6: result += 'o'; break; // ô ö
+                case 0x94: case 0x96: result += 'O'; break; // Ô Ö
+                case 0xB9: case 0xBB: case 0xBC: result += 'u'; break; // ù û ü
+                case 0x99: case 0x9B: case 0x9C: result += 'U'; break; // Ù Û Ü
+                case 0xA7: result += 'c'; break; // ç
+                case 0x87: result += 'C'; break; // Ç
+                case 0xBF: result += 'y'; break; // ÿ
+                default: result += '?'; break;
             }
         }
     }
 
     return result;
+}
+
+void OledScreen128x32::clear() {
+	if (!initialized) {
+		Serial.println("[OLED] Warning: clear() called before init()");
+		return;
+	}
+	display.clearDisplay();
+	display.display();
+	currentMessage = "";
+	lastMessage = "";
+	currentDisplayedMessage = "";
+	lastDisplayedMessage = "";
+	textShowStartTime = 0;
+	textShowEndTime = 0;
+	scrollOffset = 0;
+	lastScrollTime = 0;
 }
 
 // EXAMPLE

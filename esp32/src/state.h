@@ -19,7 +19,11 @@ enum class State {
     PLAY_RESPONSE,        // When esp is playing the audio response from the server
     ERROR,          // When esp encounters an error
     BLE_PROVISIONING,  // When esp is in BLE provisioning mode, waiting for the app to send the wifi credentials
-    BATTERY_MEASURE, // When esp is measuring the battery percentage and displaying it on the screen
+    SLEEP_MODE,  // When esp is in deep sleep mode, waiting for the wakeup timer or button press
+    FETCH_API_UPDATES, // When esp is fetching updates from the api (e.g. new messages, new commands, etc.)
+    ALARM_MODE, // When esp is in alarm mode
+    CHANGE_VOLUME, // When esp is changing the audio volume
+
 };
 enum class RecordedState {
     SENDING_AUDIO,
@@ -42,7 +46,10 @@ const char* stateToString(State state) {
     case State::PLAY_RESPONSE:        return "PLAY_RESPONSE";
     case State::ERROR:          return "ERROR";
     case State::BLE_PROVISIONING:  return "BLE_PROVISIONING";
-    case State::BATTERY_MEASURE: return "BATTERY_MEASURE";
+    case State::SLEEP_MODE: return "SLEEP_MODE";
+    case State::FETCH_API_UPDATES: return "FETCH_API_UPDATES";
+    case State::ALARM_MODE: return "ALARM_MODE";
+    case State::CHANGE_VOLUME: return "CHANGE_VOLUME";
     default:                    return "UNKNOWN_STATE";
     }
 }

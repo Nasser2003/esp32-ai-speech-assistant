@@ -6,6 +6,7 @@ public:
     void displayMessage(std::string message);
     void addMessage(std::string message, bool forceUpdate = false);
     void update();
+    void clear();
 private:
     int SDA_PIN;
     int SCK_PIN;
@@ -22,4 +23,5 @@ private:
     uint32_t lastScrollTime;
     void showMessage(const std::string& message);
     std::string normalizeText(const std::string& text);
+    bool initialized;
 };
