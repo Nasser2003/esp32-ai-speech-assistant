@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from dto.task_dto import TaskUpdate
 from databases.postgres_db import PostgresDatabase
-from config import (POSTGRES_DB, POSTGRES_HOST, POSTGRES_PASSWORD, POSTGRES_PORT, POSTGRES_USER, REDIS_TTL_EXPIRE_TIME, REDIS_HOST, REDIS_KEY_PREFIX_RECORD, 
+from config import (POSTGRES_DB, POSTGRES_HOST, POSTGRES_PASSWORD, POSTGRES_PORT, POSTGRES_USER, REDIS_TTL_EXPIRE_TIME, REDIS_HOST, REDIS_KEY_PREFIX_RECORD, SIGNAL_AI_WAKE_UP, 
     SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, 
     TRANSCRIPTION_MODEL, REDIS_PORT, OLLAMA_URL, API_WEBSOCKET_PATH,
     VOICE_LANGUAGE)
@@ -56,7 +56,6 @@ def get_current_task(db: postgres_dep, mac_address: str):
     task = (
         db.query(Task)
         .filter(Task.device == mac_address) # target esp device
-        .filter(Task.type == TaskTypeEnum.ALARM) # 
         .filter(Task.status == TaskStatusEnum.PENDING)
         .filter(Task.run_at <= datetime.now(timezone.utc))
         .order_by(Task.run_at.asc())
@@ -113,6 +112,7 @@ async def websocket(client_ws: WebSocket):
             IS_RECORDING_START = IS_SIGNAL and message["text"] == SIGNAL_RECORDING_START
             IS_RECORDING_END = IS_SIGNAL and message["text"] == SIGNAL_RECORDING_END
             IS_WEBSOCKET_CLOSE = (message["type"] == "websocket.disconnect")
+            IS_AI_WAKE_UP = IS_SIGNAL and message["text"] == SIGNAL_AI_WAKE_UP
             
             if message is None:
                 break

@@ -1,6 +1,6 @@
 # API
 api/.venv
-api/__pycache__
+__pycache__
 
 # ESP32
 .pio

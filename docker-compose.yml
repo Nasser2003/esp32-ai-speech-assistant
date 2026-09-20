@@ -54,6 +54,7 @@ services:
       SIGNAL_AI_TEXT_END: ${SIGNAL_AI_TEXT_END}
       SIGNAL_AI_TTS_START: ${SIGNAL_AI_TTS_START}
       SIGNAL_AI_TTS_END: ${SIGNAL_AI_TTS_END}
+      SIGNAL_AI_WAKE_UP: ${SIGNAL_AI_WAKE_UP}
 
   postgres:
     image: docker.io/library/postgres:17

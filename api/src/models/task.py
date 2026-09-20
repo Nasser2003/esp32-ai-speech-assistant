@@ -6,7 +6,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 class TaskTypeEnum(str, Enum):
     ALARM = "ALARM"
-    MSG_FROM_AI = "MSG_FROM_AI"
+    WAKE_UP_AI = "WAKE_UP_AI"
+    CHANGE_VOLUME = "CHANGE_VOLUME"
 
 class TaskStatusEnum(str, Enum):
     PENDING = "PENDING"
