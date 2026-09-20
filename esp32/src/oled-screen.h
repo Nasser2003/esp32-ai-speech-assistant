@@ -23,4 +23,5 @@ private:
     uint32_t lastScrollTime;
     void showMessage(const std::string& message);
     std::string normalizeText(const std::string& text);
+    bool initialized;
 };

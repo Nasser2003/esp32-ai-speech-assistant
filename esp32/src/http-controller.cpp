@@ -34,7 +34,9 @@ int HttpController::get(const char* path, String& response)
 int HttpController::getCurrentTask(Task& task)
 {
     String response;
-    const int statusCode = get("/current-task", response);
+    String macAddress = WiFi.macAddress();
+    String path = "/current-task?mac_address=" + macAddress;
+    const int statusCode = get(path.c_str(), response);
     if (statusCode <= 0) {
         return statusCode;
     }
@@ -45,11 +47,14 @@ int HttpController::getCurrentTask(Task& task)
         return -2;
     }
 
+    if (document["error"].as<bool>()) {
+        return -3;
+    }
+
     task.id = document["id"] | 0;
-    task.taskType = document["task_type"] | "";
+    task.type = taskTypeToEnum(document["task_type"] | "");
     task.runAt = document["run_at"] | "";
-    task.hasArgument = !document["argument"].isNull();
-    task.argument = task.hasArgument ? document["argument"].as<String>() : "";
+    task.argument = document["argument"].as<String>();
 
     currentTask = task;
     return statusCode;
@@ -100,4 +105,31 @@ String HttpController::buildUrl(const char* path) const
     }
 
     return "http://" + String(host) + ":" + String(port) + normalizedPath;
+}
+
+TaskType taskTypeToEnum(String type)
+{
+    if (type == "ALARM") {
+        return TaskType::ALARM;
+    } else if (type == "WAKE_UP_AI") {
+        return TaskType::WAKE_UP_AI;
+    } else if (type == "CHANGE_VOLUME") {
+        return TaskType::CHANGE_VOLUME;
+    } else {
+        return TaskType::UNKNOWN; // Default to ALARM if unknown
+    }
+}
+
+String taskTypeToString(TaskType type)
+{
+    switch (type) {
+        case TaskType::ALARM:
+            return "ALARM";
+        case TaskType::WAKE_UP_AI:
+            return "WAKE_UP_AI";
+        case TaskType::CHANGE_VOLUME:
+            return "CHANGE_VOLUME";
+        default:
+            return "UNKNOWN";
+    }
 }

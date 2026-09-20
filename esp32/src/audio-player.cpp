@@ -32,6 +32,30 @@ bool AudioPlayer::init()
     Serial.printf("Flash: %u MB\n", ESP.getFlashChipSize() / (1024 * 1024));
     Serial.printf("PSRAM: %u MB\n", ESP.getPsramSize() / (1024 * 1024));
 
+    const size_t total = LittleFS.totalBytes();
+    const size_t used  = LittleFS.usedBytes();
+    const size_t free  = total - used;
+
+    Serial.println("========== LittleFS ==========");
+    Serial.printf(
+        "Total : %u bytes (%.2f MiB)\n",
+        total,
+        total / 1024.0 / 1024.0
+    );
+    Serial.printf(
+        "Used  : %u bytes (%.2f MiB) - %.1f%%\n",
+        used,
+        used / 1024.0 / 1024.0,
+        total > 0 ? (used * 100.0 / total) : 0.0
+    );
+    Serial.printf(
+        "Free  : %u bytes (%.2f MiB) - %.1f%%\n",
+        free,
+        free / 1024.0 / 1024.0,
+        total > 0 ? (free * 100.0 / total) : 0.0
+    );
+    Serial.println("==============================");
+
     pcmQueue = xQueueCreate(PCM_QUEUE_LENGTH, sizeof(AudioChunk));
 
     if (pcmQueue == nullptr) {

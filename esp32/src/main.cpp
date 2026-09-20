@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiProv.h>
+#include <esp_wifi.h>
+#include <wifi_provisioning/manager.h>
+#include "wifi-credentials-manager.h"
 
 #include "i2s-audio-manager.h"
 #include "audio-player.h"
@@ -47,8 +50,9 @@ Timer enterSleepModeTimer(ENV::SLEEP_TIMEOUT);
 Timer sleepTimeout(2000);
 Timer fetchTimer(2000);
 Timer waitingAiTimeout(30000);
-Timer alarmTimeout(30000);
+Timer alarmTimeout(5000);
 Timer alarmOverDelay(1000);
+Timer changeVolumeTimer(1000);
 
 Timer updateTimer(0);
 
@@ -60,6 +64,12 @@ static EspWakeUpCause WAKE_UP_CAUSE;
 // Varialbe stored in RTC memory (kept even after deep sleep). 
 // If API connection was successful, allow periodic timer wake up for api update
 RTC_DATA_ATTR bool isAPIConnectionSuccessful = false;
+static Task currentTask;
+
+// WiFi credentials manager (LRU-ordered, persisted in NVS)
+// Using a pointer to avoid any potential global constructor issues on ESP32-C3
+WifiCredentialsManager* credManager = nullptr;
+static int _credIndex = 0; // current credential being tried in CONNECTING_WIFI
 
 // Function declarations
 void setWebSocketCallback();
@@ -70,6 +80,14 @@ void initComponents();
 void setup()
 {
     Serial.begin(115200);
+
+    delay(1000); // Useful to not skip the first Serial.print() after esp start
+
+    // Heap-allocate the credentials manager to avoid any global-ctor issues
+    credManager = new WifiCredentialsManager();
+
+    // Load stored WiFi credentials from NVS
+    credManager->load();
 
     // WiFi.setTxPower(WIFI_POWER_8_5dBm); // Set the WiFi transmission power to 8.5 dBm
     setWebSocketCallback();
@@ -103,13 +121,13 @@ void loop()
             else if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) 
             {
                 Serial.println("[WAKEUP] Wakeup cause: TIMER");
-                preInitTimer.setDuration(0);
                 initTimer.setDuration(0);
                 initbatteryTimer.setDuration(0);
                 connectingTimer.setDuration(0);
                 connectedWifiTimer.setDuration(0);
                 enterSleepModeTimer.setDuration(0);
                 changeState(State::CONNECTING_WIFI);
+                updateTimer.start();
                 break;
             } 
             else 
@@ -122,16 +140,14 @@ void loop()
         {
             changeState(State::INIT);
         }
+        break;
     case State::INIT:
         if (runOnceOnStateChange()) 
         {
             updateTimer.start();
             initComponents();
 
-            if (WAKE_UP_CAUSE == EspWakeUpCause::RESET) 
-            {
-                screen.displayMessage("Initializing...");
-            }
+            screen.displayMessage("Initializing...");
             
             initbatteryTimer.start();
             initTimer.start();
@@ -140,10 +156,7 @@ void loop()
         {
             initbatteryTimer.breakIt();
             std::string batteryPercentage = std::to_string(powerController.getBatteryPercentage());
-            if (WAKE_UP_CAUSE == EspWakeUpCause::RESET) 
-            {
-                screen.addMessage("\nBattery: " + batteryPercentage + "%");
-            }
+            screen.addMessage("\nBattery: " + batteryPercentage + "%");
         }
         if (initTimer.isElapsed()) 
         {
@@ -153,20 +166,55 @@ void loop()
     case State::CONNECTING_WIFI:
         if (runOnceOnStateChange()) 
         {
-            Serial.print("Wakeup cause: ");
-            Serial.println((int)powerController.getWakeUpCause());
-            screen.displayMessage("Connecting to WiFi...");
-            WiFi.begin();
+            _credIndex = 0;
+            if (credManager == nullptr || credManager->count() == 0) {
+                // No stored credentials — go straight to BLE provisioning
+                changeState(State::BLE_PROVISIONING);
+                break;
+            }
+            const auto& creds = credManager->getAll();
+            // Try the first (most-recently-used) credential
+            const WifiCredential& c = creds[_credIndex];
+            screen.displayMessage(
+                "Connecting to WiFi...\n" + c.ssid + " (" + std::to_string(_credIndex + 1) +
+                "/" + std::to_string(creds.size()) + ")"
+            );
+            Serial.printf("[WiFi] Trying credential [%d]: %s\n", _credIndex, c.ssid.c_str());
+            WiFi.begin(c.ssid.c_str(), c.password.c_str());
             connectingTimeout.start();
             connectingTimer.start();
         }
         if (WiFi.status() == WL_CONNECTED && connectingTimer.isElapsed()) 
         {
+            // Promote successfully used credential to front of LRU list
+            if (credManager != nullptr) {
+                const auto& creds = credManager->getAll();
+                if (_credIndex < (int)creds.size()) {
+                    credManager->promote(creds[_credIndex].ssid);
+                }
+            }
             changeState(State::CONNECTED_WIFI);
         }
         if (connectingTimeout.isElapsed()) 
         {
-            changeState(State::CONNECTION_FAILED);
+            WiFi.disconnect();
+            _credIndex++;
+            const auto& creds = credManager->getAll();
+            if (_credIndex < (int)creds.size()) {
+                // Try the next credential
+                const WifiCredential& c = creds[_credIndex];
+                screen.displayMessage(
+                    "Connecting to WiFi...\n" + c.ssid + " (" + std::to_string(_credIndex + 1) +
+                    "/" + std::to_string(creds.size()) + ")"
+                );
+                Serial.printf("[WiFi] Trying credential [%d]: %s\n", _credIndex, c.ssid.c_str());
+                WiFi.begin(c.ssid.c_str(), c.password.c_str());
+                connectingTimeout.start();
+            } else {
+                // All credentials exhausted
+                Serial.println("[WiFi] All credentials failed.");
+                changeState(State::CONNECTION_FAILED);
+            }
         }
         break;
     case State::CONNECTION_FAILED:
@@ -239,17 +287,37 @@ void loop()
             if (statusCode >= 200 && statusCode < 300) {
                 Serial.printf("[STATE] Current task: %d %s (%s)\n",
                     task.id,
-                    task.taskType.c_str(),
-                    task.hasArgument ? task.argument.c_str() : "null");
+                    taskTypeToString(task.type).c_str(),
+                    task.argument.c_str());
+                currentTask = task;
             } else {
                 Serial.printf("[STATE] Current task request failed: %d\n", statusCode);
+                break;
             }
-            if (task.taskType == "ALARM") {
-                changeState(State::ALARM_MODE);
+
+            // Initialize components to prepare for the task
+            if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
+                initComponents();
+            }
+
+            switch (task.type)
+            {
+            case TaskType::ALARM:
+                // Changing the cause to make it functional at normal condition
                 if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
-                    initComponents();
-                    changeState(State::ALARM_MODE);
+                    WAKE_UP_CAUSE = EspWakeUpCause::GPIO;
                 }
+                changeState(State::ALARM_MODE);
+                break;
+            case TaskType::CHANGE_VOLUME:
+                if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
+                    changeState(State::SLEEP_MODE);
+                } else {
+                    changeState(State::CHANGE_VOLUME);
+                }
+                break;
+            default:
+                break;
             }
         }
         if (fetchTimer.isElapsed()) {
@@ -388,7 +456,7 @@ void loop()
     case State::ERROR:
         if (runOnceOnStateChange())
         {
-            screen.addMessage("\nPress the button to reset.");
+            screen.addMessage("\nPress to reset.");
             enterSleepModeTimer.start();
         }
         if (isButtonPressed() && WAKE_UP_CAUSE != EspWakeUpCause::TIMER) {
@@ -406,18 +474,51 @@ void loop()
                 changeState(State::ERROR);
                 break;
             }
-            screen.displayMessage("[SYS] BLE prov. mode: Use the app to connect to WiFi. Or press the button to retry.");
+            screen.displayMessage(
+                "[SYS] BLE prov. mode\nUse the app to add a WiFi network.\nStored: " +
+                std::to_string(credManager ? credManager->count() : 0) + "/" +
+                std::to_string(WifiCredentialsManager::MAX_CREDENTIALS)
+            );
+            // Clean up any previous provisioning session so beginProvision() can re-initialize cleanly
+            wifi_prov_mgr_deinit();
+            delay(100);
+
+            // Stop WiFi auto-reconnect to prevent reconnect loop to old stored network
+            WiFi.setAutoReconnect(false);
+            WiFi.disconnect(false, false);
+            delay(100);
+            // reset_provisioned=true: clears WiFiProv's native WiFi NVS so it doesn't
+            // skip BLE advertising with "Already Provisioned". Our custom "wifi_creds"
+            // NVS namespace is separate and unaffected by this reset.
+            // WIFI_PROV_SCHEME_HANDLER_NONE preserves Bluetooth RAM so BLE can restart.
             WiFiProv.beginProvision(
                 WIFI_PROV_SCHEME_BLE,
-                WIFI_PROV_SCHEME_HANDLER_FREE_BTDM,
+                WIFI_PROV_SCHEME_HANDLER_NONE,
                 WIFI_PROV_SECURITY_1,
-                "abcd1234",
-                "ESP32_Provisioning"
+                "abcd1234",           // proof of possession
+                "ESP32_Provisioning", // BLE device name visible in the app
+                nullptr,              // service_key (unused for security level 1)
+                nullptr,              // custom UUID
+                true                  // reset_provisioned: force BLE advertising even if already provisioned
             );
             enterSleepModeTimer.start();
         }
         if (WiFi.status() == WL_CONNECTED) {
+            // BLE provisioning succeeded — read the new credential from esp_wifi
+            // and accumulate it in our NVS manager (LRU)
+            if (credManager != nullptr) {
+                wifi_config_t wifiCfg;
+                if (esp_wifi_get_config(WIFI_IF_STA, &wifiCfg) == ESP_OK) {
+                    std::string ssid(reinterpret_cast<const char*>(wifiCfg.sta.ssid));
+                    std::string pass(reinterpret_cast<const char*>(wifiCfg.sta.password));
+                    if (!ssid.empty()) {
+                        credManager->add(ssid, pass);
+                        Serial.printf("[WiFiProv] Credential saved: %s\n", ssid.c_str());
+                    }
+                }
+            }
             changeState(State::CONNECTED_WIFI);
+            isAPIConnectionSuccessful = true;
         }
         if (isButtonPressed()) {
             changeState(State::CONNECTING_WIFI);
@@ -439,13 +540,14 @@ void loop()
             if (WAKE_UP_CAUSE != EspWakeUpCause::TIMER) {
                 screen.clear();
             }
+            // if last connection was successful, during active mode, it will allow periodic wakeup
             powerController.startSleep(isAPIConnectionSuccessful);
         }
         break;
     case State::ALARM_MODE:
         if (runOnceOnStateChange())
         {
-            screen.displayMessage("[SYS] Alarm mode: Press to stop.\n");
+            screen.displayMessage("[SYS] Alarm mode: \nPress to stop.\n");
             audioPlayer.play("/alarm.wav");
             alarmTimeout.start();
         }
@@ -464,12 +566,23 @@ void loop()
             audioPlayer.play("/alarm.wav");
         }
         break;
+    case State::CHANGE_VOLUME:
+        if (runOnceOnStateChange())
+        {
+            const char* volumeStr = currentTask.argument.c_str();
+            screen.displayMessage("[SYS] Changing volume to:\n " + std::string(volumeStr) + "%");
+            audioPlayer.setVolume(atoi(volumeStr));
+            changeVolumeTimer.start();
+        }
+        if (changeVolumeTimer.isElapsed()) {
+            changeState(State::IDLE);
+        }
     default:
         break;
     }
 
     // Update variables
-    if (false || updateTimer.isElapsed()) { // I put true to skip the time for now 
+    if (updateTimer.isElapsed()) { // I put true to skip the time for now 
         updateTimer.start();
 
         ledcWrite(0, blueLedPulse.getPulseState());
@@ -546,14 +659,26 @@ void setWifiCallback() {
             break;
         case ARDUINO_EVENT_PROV_CRED_FAIL:
             Serial.println("[WiFiProv] Credentials failed");
-            changeState(State::ERROR);
-            screen.displayMessage("[SYS] Error: BLE provisioning failed : Credentials rejected.");
+            if (getState() != State::ERROR) {
+                screen.displayMessage("[SYS] Error: BLE provisioning failed : Credentials rejected.");
+                changeState(State::ERROR);
+            }
             break;
-        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-            Serial.println("[WiFi] Disconnected unexpectedly");
-            changeState(State::ERROR);
-            screen.displayMessage("[SYS] Error: WiFi disconnected.");
-            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+            State s = getState();
+            // Ignore disconnect events during states that intentionally manage WiFi
+            if (s == State::BLE_PROVISIONING || s == State::CONNECTING_WIFI ||
+                s == State::NONE || s == State::INIT) {
+                Serial.println("[WiFi] Disconnected (expected, ignoring)");
+                break;
+            }
+            if (s != State::ERROR) {
+                Serial.println("[WiFi] Disconnected unexpectedly");
+                screen.displayMessage("[SYS] Error: WiFi disconnected.");
+                changeState(State::BLE_PROVISIONING);
+                break;
+            }
+        }
         case ARDUINO_EVENT_PROV_END:
             Serial.println("[WiFiProv] Ended");
             break;
@@ -567,6 +692,7 @@ void initComponents() {
         Serial.println("AudioPlayer initialization failed");
         screen.displayMessage("[SYS] AudioPlayer initialization failed");
         changeState(State::ERROR);
+        return; // Do NOT call startStream() on a failed/uninitialized player
     }
     audioPlayer.setVolume(15);
     audioPlayer.startStream();

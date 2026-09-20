@@ -2,13 +2,28 @@
 
 #include <Arduino.h>
 
+enum class TaskStatus {
+    PENDING,
+    COMPLETED,
+    CANCELLED
+};
+
+enum class TaskType {
+    ALARM,
+    WAKE_UP_AI,
+    CHANGE_VOLUME,
+    UNKNOWN
+};
+
+TaskType taskTypeToEnum(String type);
+String taskTypeToString(TaskType type);
+
 struct Task
 {
     int id;
-    String taskType;
+    TaskType type;
     String runAt;
     String argument;
-    bool hasArgument;
 };
 
 class HttpController

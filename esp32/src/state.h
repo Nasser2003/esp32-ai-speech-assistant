@@ -22,6 +22,7 @@ enum class State {
     SLEEP_MODE,  // When esp is in deep sleep mode, waiting for the wakeup timer or button press
     FETCH_API_UPDATES, // When esp is fetching updates from the api (e.g. new messages, new commands, etc.)
     ALARM_MODE, // When esp is in alarm mode
+    CHANGE_VOLUME, // When esp is changing the audio volume
 
 };
 enum class RecordedState {
@@ -48,6 +49,7 @@ const char* stateToString(State state) {
     case State::SLEEP_MODE: return "SLEEP_MODE";
     case State::FETCH_API_UPDATES: return "FETCH_API_UPDATES";
     case State::ALARM_MODE: return "ALARM_MODE";
+    case State::CHANGE_VOLUME: return "CHANGE_VOLUME";
     default:                    return "UNKNOWN_STATE";
     }
 }

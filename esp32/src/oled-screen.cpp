@@ -23,9 +23,14 @@ OledScreen128x32::OledScreen128x32(int SDA_PIN, int SCK_PIN, bool animated, int 
 	textShowStartTime = 0;
 	scrollOffset = 0;
 	lastScrollTime = 0;
+	initialized = false;
 }
 
 void OledScreen128x32::init() {
+    if (initialized) {
+        return;
+    }
+	initialized = true;
 	Wire.begin(SDA_PIN, SCK_PIN);
 	display.setRotation(0);
 	display.setTextColor(SSD1306_WHITE);
@@ -39,6 +44,10 @@ void OledScreen128x32::init() {
 }
 
 void OledScreen128x32::displayMessage(std::string message) {
+	if (!initialized) {
+		Serial.println("[OLED] Warning: displayMessage() called before init()");
+		return;
+	}
 	Serial.print("[OLED ORDER] previous message: ");
 	Serial.print(this->currentMessage.c_str());
 	Serial.print("; [OLED ORDER] setting current message: ");
@@ -52,6 +61,10 @@ void OledScreen128x32::displayMessage(std::string message) {
 }
 
 void OledScreen128x32::addMessage(std::string message, bool forceUpdate) {
+	if (!initialized) {
+		Serial.println("[OLED] Warning: addMessage() called before init()");
+		return;
+	}
 	Serial.print("[OLED ORDER] previous message: ");
 	Serial.print(this->lastMessage.c_str());
 	Serial.print("; [OLED ORDER] adding message: ");
@@ -70,6 +83,10 @@ void OledScreen128x32::addMessage(std::string message, bool forceUpdate) {
 }
 
 void OledScreen128x32::update() {
+	// if (!initialized) {
+	// 	Serial.println("[OLED] Warning: update() called before init()");
+	// 	return;
+	// }
 	bool sameMessage = this->currentMessage == this->lastMessage;
 	if (sameMessage) {
 		return;
@@ -188,6 +205,10 @@ std::string OledScreen128x32::normalizeText(const std::string& text) {
 }
 
 void OledScreen128x32::clear() {
+	if (!initialized) {
+		Serial.println("[OLED] Warning: clear() called before init()");
+		return;
+	}
 	display.clearDisplay();
 	display.display();
 	currentMessage = "";
