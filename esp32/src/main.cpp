@@ -237,7 +237,8 @@ void loop()
             Task task;
             const int statusCode = httpController.getCurrentTask(task);
             if (statusCode >= 200 && statusCode < 300) {
-                Serial.printf("[STATE] Current task: %s (%s)\n",
+                Serial.printf("[STATE] Current task: %d %s (%s)\n",
+                    task.id,
                     task.taskType.c_str(),
                     task.hasArgument ? task.argument.c_str() : "null");
             } else {
@@ -444,26 +445,25 @@ void loop()
     case State::ALARM_MODE:
         if (runOnceOnStateChange())
         {
-            screen.displayMessage("[SYS] Alarm mode: Press the button to stop the alarm.");
+            screen.displayMessage("[SYS] Alarm mode: Press to stop.\n");
             audioPlayer.play("/alarm.wav");
             alarmTimeout.start();
         }
-        if (!audioPlayer.isAudioPlaying() && audioPlayer.isStreamBufferEmpty()) {
-            audioPlayer.play("/alarm.wav");
-        }
         if (alarmOverDelay.isElapsed()) {
-            audioPlayer.stop();
+            httpController.updateTask();
             changeState(State::IDLE);
-            break;
-        } else if (isButtonPressed() && alarmTimeout.breakIt()) {
-            screen.addMessage("[SYS] Alarm stopped. Returning to IDLE.");
+        } else if (isButtonPressed() && alarmOverDelay.isNotStarted()) {
             audioPlayer.stop();
+            screen.addMessage("[SYS] Alarm stopped. Returning to IDLE.");
             alarmOverDelay.start();
         } else if (alarmTimeout.isElapsed()) {
             screen.addMessage("[SYS] Alarm timeout.");
             audioPlayer.stop();
             changeState(State::SLEEP_MODE);
+        } else if (!audioPlayer.isAudioPlaying() && alarmOverDelay.isNotStarted()) {
+            audioPlayer.play("/alarm.wav");
         }
+        break;
     default:
         break;
     }

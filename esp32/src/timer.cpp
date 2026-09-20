@@ -15,22 +15,39 @@ void Timer::setDuration(uint32_t durationMs) {
     duration = durationMs;
 }
 
+bool Timer::isNotStarted() const {
+    return getState() == TimerState::NOT_STARTED;
+}
+
+bool Timer::isBroken() const {
+    return getState() == TimerState::BROKEN;
+}
+
+bool Timer::isRunning() const {
+    return getState() == TimerState::RUNNING;
+}
+
 bool Timer::isElapsed() const
 {
-    if (startTime == UINT32_MAX) {
-        return false; // Timer broken
-    }
-
-    if (startTime == 0) {
-        return false; // Timer not started
-    }
-    return millis() - startTime >= duration;
+    return getState() == TimerState::ELAPSED;
 }
 
 bool Timer::breakIt() {
-    if (startTime == UINT32_MAX) {
+    if (getState() == TimerState::BROKEN) {
         return false; // Timer already broken
     }
     startTime = UINT32_MAX;
     return true;
+}
+
+TimerState Timer::getState() const {
+    if (startTime == 0) {
+        return TimerState::NOT_STARTED;
+    } else if (startTime == UINT32_MAX) {
+        return TimerState::BROKEN;
+    } else if (millis() - startTime >= duration) {
+        return TimerState::ELAPSED;
+    } else {
+        return TimerState::RUNNING;
+    }
 }

@@ -289,6 +289,7 @@ void AudioPlayer::pcmTask()
 
             if (chunk->length == 0) {
                 Serial.println("[PCM] Sentinel received — batch done");
+                i2s_zero_dma_buffer(I2S_NUM_0);
                 audioPlaying = false;
                 streamEnded = false;
                 ttsBusy = false;

@@ -20,6 +20,8 @@ int HttpController::get(const char* path, String& response)
         return -1;
     }
 
+    client.setTimeout(2000);
+
     const int statusCode = client.GET();
     if (statusCode > 0) {
         response = client.getString();
@@ -43,10 +45,50 @@ int HttpController::getCurrentTask(Task& task)
         return -2;
     }
 
+    task.id = document["id"] | 0;
     task.taskType = document["task_type"] | "";
     task.runAt = document["run_at"] | "";
     task.hasArgument = !document["argument"].isNull();
     task.argument = task.hasArgument ? document["argument"].as<String>() : "";
+
+    currentTask = task;
+    return statusCode;
+}
+
+int HttpController::updateTask()
+{
+    if (currentTask.id <= 0 ||
+        WiFi.status() != WL_CONNECTED) {
+        return -1;
+    }
+
+    HTTPClient client;
+
+    const String path = "/tasks/" + String(currentTask.id);
+
+    if (!client.begin(buildUrl(path.c_str()))) {
+        return -1;
+    }
+
+    client.setTimeout(2000);
+
+    client.addHeader(
+        "Content-Type",
+        "application/json"
+    );
+
+    JsonDocument document;
+
+    document["task_status"] = "COMPLETED";
+
+    String body;
+
+    serializeJson(document, body);
+
+    const int statusCode = client.PATCH(body);
+
+    client.end();
+
     return statusCode;
 }
 
