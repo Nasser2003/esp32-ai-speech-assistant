@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <WiFi.h>
 #include <WiFiProv.h>
 #include <esp_wifi.h>
@@ -16,6 +17,7 @@
 #include "websocket-controller.h"
 #include "http-controller.h"
 #include "power-controller.h"
+#include "location-time-api.h"
 
 // Controllers
 I2SAudioManager i2sManager(
@@ -31,6 +33,7 @@ SinusPulse blueLedPulse(1, 270);
 WebsocketController webSocket(ENV::API_HOST, ENV::API_PORT, ENV::API_WEBSOCKET_PATH);
 HttpController httpController(ENV::API_HOST, ENV::API_PORT);
 PowerController powerController(ENV::BATTERY_PIN, ENV::WAKEUP_INTERVAL, ENV::BUTTON_PIN, 1000);
+LocationTimeApi locationTimeApi;
 
 // Timers for state transitions and timeouts
 Timer preInitTimer(10);
@@ -74,6 +77,7 @@ void setWebSocketCallback();
 void setWifiCallback();
 bool isButtonPressed();
 void initComponents();
+String generateEsp32InfoJson(String type, int taskId);
 
 void setup()
 {
@@ -416,6 +420,8 @@ void loop()
                 if (segment != nullptr) {
                     webSocket.sendAudio(segment, chunkSize);
                 } else {
+                    String message = String(ENV::ARGUMENT) + ":" + generateEsp32InfoJson(ENV::RECORDING_END, -1);
+                    webSocket.sendMessage(message.c_str());
                     webSocket.sendMessage(ENV::RECORDING_END);
                     changeRecordedState(RecordedState::ENDING_AUDIO);
                 }
@@ -548,6 +554,9 @@ void loop()
             sleepTimeout.start();
             screen.displayMessage("[SYS] Entering sleep mode...");
         }
+        if (isButtonPressed() && WAKE_UP_CAUSE != EspWakeUpCause::TIMER) {
+            changeState(State::CONNECTING_WIFI);
+        }
         if (sleepTimeout.isElapsed())
         {
             sleepTimeout.breakIt();
@@ -604,8 +613,9 @@ void loop()
                 break;
             }
             httpController.updateTask();
-            String message = String(ENV::AI_WAKE_UP) + ":" + currentTask.id;
+            String message = String(ENV::ARGUMENT) + ":" + generateEsp32InfoJson(ENV::AI_WAKE_UP, currentTask.id);
             webSocket.sendMessage(message.c_str());
+            webSocket.sendMessage(ENV::AI_WAKE_UP);
             audioPlayer.startStream(); 
             changeState(State::WAITING_AI_RESPONSE);
         } else if (isButtonPressed() && alarmOverDelay.isNotStarted()) {
@@ -634,7 +644,14 @@ void loop()
         webSocket.update();
         powerController.update();
 
-        bool PRESSED_DURING_WAKEUP_BY_TIMER_SLEEP = isButtonPressed() && WAKE_UP_CAUSE == EspWakeUpCause::TIMER;
+        // selecting some states to avoid breaking any logic or some processes in progress
+        bool PRESSED_DURING_WAKEUP_BY_TIMER_SLEEP = 
+            isButtonPressed() 
+            && WAKE_UP_CAUSE == EspWakeUpCause::TIMER
+            &&( getState() == State::CONNECTING_WIFI
+            || getState() == State::CONNECTED_WIFI
+            || getState() == State::FETCH_API_UPDATES
+            || getState() == State::SLEEP_MODE);
         if (PRESSED_DURING_WAKEUP_BY_TIMER_SLEEP) {
             // WAKING UP IN GPIO MODE AS IF THE USER PRESSED THE BUTTON DURING SLEEP MODE
             WAKE_UP_CAUSE = EspWakeUpCause::GPIO;
@@ -747,6 +764,31 @@ void initComponents() {
         changeState(State::ERROR);
         return; // Do NOT call startStream() on a failed/uninitialized player
     }
-    audioPlayer.setVolume(15);
     audioPlayer.startStream();
+}
+
+String generateEsp32InfoJson(String type,int taskId)
+{
+    JsonDocument document;
+
+    document["type"] = type;
+    document["volume"] = audioPlayer.getVolume();
+    document["battery"] = powerController.getBatteryPercentage();
+
+    if (locationTimeApi.begin()) {
+        const LocationTime& info = locationTimeApi.get();
+
+        document["date_time"] = info.dateTime;
+        document["location"] = info.location;
+        document["timezone"] = info.timezone;
+    }
+
+    if (taskId != -1) {
+        document["task_id"] = taskId;
+    }
+
+    String json;
+    serializeJson(document, json);
+
+    return json;
 }

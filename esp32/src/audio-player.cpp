@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <Preferences.h>
+#include <cmath>
 #include <cstring>
 
 AudioPlayer::AudioPlayer(I2SAudioManager& manager)
@@ -24,6 +26,13 @@ AudioPlayer::AudioPlayer(I2SAudioManager& manager)
 
 bool AudioPlayer::init()
 {
+    Preferences prefs;
+    if (prefs.begin("audio", true)) {
+        uint8_t savedVol = prefs.getUChar("volume", 30);
+        prefs.end();
+        volumeGain = static_cast<float>(savedVol) / 100.0f;
+    }
+
     Serial.println("Initialisation LittleFS...");
 
     if (!LittleFS.begin(false)) {
@@ -190,7 +199,23 @@ void AudioPlayer::stop()
 }
 
 void AudioPlayer::setVolume(uint8_t volume) {
+    if (volume > 100) {
+        volume = 100;
+    }
+    if (volume < 1) {
+        volume = 1;
+    }
     volumeGain = static_cast<float>(volume) / 100.0f;
+
+    Preferences prefs;
+    if (prefs.begin("audio", false)) {
+        prefs.putUChar("volume", volume);
+        prefs.end();
+    }
+}
+
+uint8_t AudioPlayer::getVolume() const {
+    return static_cast<uint8_t>(roundf(volumeGain * 100.0f));
 }
 
 void AudioPlayer::applyVolume(int16_t* samples, size_t sampleCount) {

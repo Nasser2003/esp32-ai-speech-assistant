@@ -25,6 +25,7 @@ public:
     bool isStreamDrained() const;
 
     void setVolume(uint8_t volume);
+    uint8_t getVolume() const;
 
 private:
     // I2S audio manager reference
