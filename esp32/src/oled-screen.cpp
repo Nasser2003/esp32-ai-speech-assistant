@@ -48,10 +48,9 @@ void OledScreen128x32::displayMessage(std::string message) {
 		Serial.println("[OLED] Warning: displayMessage() called before init()");
 		return;
 	}
-	Serial.print("[OLED ORDER] previous message: ");
-	Serial.print(this->currentMessage.c_str());
-	Serial.print("; [OLED ORDER] setting current message: ");
+	Serial.println("[OLED MESSAGE] ========================");
 	Serial.println(message.c_str());
+	Serial.println("=======================================");
 	// Serial.print("[OLED ORDER] Setting message: ");
 	// Serial.println(message.c_str());
 	this->lastMessage = this->currentMessage;
@@ -65,10 +64,9 @@ void OledScreen128x32::addMessage(std::string message, bool forceUpdate) {
 		Serial.println("[OLED] Warning: addMessage() called before init()");
 		return;
 	}
-	Serial.print("[OLED ORDER] previous message: ");
-	Serial.print(this->lastMessage.c_str());
-	Serial.print("; [OLED ORDER] adding message: ");
+	Serial.println("[OLED MESSAGE] ========================");
 	Serial.println(message.c_str());
+	Serial.println("=======================================");
 	// Serial.print("[OLED ORDER] Setting message: ");
 	// Serial.println(message.c_str());
 	uint32_t last_display_duration = this->textShowEndTime - this->textShowStartTime;

@@ -20,6 +20,9 @@ public:
     bool isAudioPlaying() const;
     bool isStreamPlaying() const;
     bool isStreamBufferEmpty() const;
+    // Returns true once the DMA has had enough time to output the last PCM chunk.
+    // Call after isStreamBufferEmpty() to avoid cutting off the audio tail.
+    bool isStreamDrained() const;
 
     void setVolume(uint8_t volume);
 
@@ -54,6 +57,10 @@ private:
     volatile bool wavPlaying;   // true tant que la tâche fichier pousse des chunks
     volatile bool stopRequested;
     volatile bool ttsBusy;
+    volatile bool isDraining;   // true after sentinel until DMA_DRAIN_MS have elapsed
+    volatile uint32_t drainStartMs;
+    // DMA drain time: dma_buf_count(16) × dma_buf_len(256) samples @ 16 kHz → ~256 ms, use 350 ms margin
+    static constexpr uint32_t DMA_DRAIN_MS = 350;
 
     static void pcmTaskEntry(void* parameter);
     void pcmTask();

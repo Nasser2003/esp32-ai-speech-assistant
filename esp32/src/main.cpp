@@ -289,7 +289,7 @@ void loop()
                     task.argument.c_str());
                 currentTask = task;
             } else {
-                Serial.printf("[STATE] Current task request failed: %d\n", statusCode);
+                Serial.printf("[STATE] No task available: %d\n", statusCode);
                 break;
             }
 
@@ -335,7 +335,7 @@ void loop()
             );
             ai_text_finished = false;
             ai_tts_finished = false;
-            audioPlayer.pushStream(nullptr, 0);
+            audioPlayer.stop();   // clear ttsBusy/wavPlaying so play() works next time
             WiFi.setSleep(true);
             enterSleepModeTimer.start();
         }
@@ -361,9 +361,12 @@ void loop()
                 changeState(State::CONNECTING_API);
                 break;
             }
-            // Start recording immediately without waiting for WiFi
-            audioPlayer.play("/button-press.wav");
             screen.displayMessage("[SYS] Recording...");
+            // Play the press sound synchronously before activating the mic.
+            // The ESP32-C3 has a single I2S port shared between mic (RX) and
+            // speaker (TX) — playing and recording cannot overlap.
+            audioPlayer.play("/button-press.wav");
+            while (audioPlayer.isPlaying()) { vTaskDelay(1); }
             recorder.startRecording();
             blueLedPulse.startPulse();
             minRecordingTimer.start();
@@ -395,8 +398,9 @@ void loop()
         if (runOnceOnStateChange()) 
         {
             changeRecordedState(RecordedState::SENDING_AUDIO);
+            recorder.stopRecording();      // switches I2S back to TX
+            audioPlayer.startStream();     // re-arm streamPlaying so TTS pushStream() works
             audioPlayer.play("/button-release.wav");
-            recorder.stopRecording();
             blueLedPulse.stopPulse();
             recordStopTimer.start();
             waitingAiTimeout.start();
@@ -424,8 +428,13 @@ void loop()
     case State::WAITING_AI_RESPONSE:
         if (runOnceOnStateChange())
         {
-            screen.addMessage("\n[SYS] Waiting for AI\n");
-            audioPlayer.play("/ai-begin.wav");
+            if (getLastState() != State::AI_RINGSTONE) {
+                screen.addMessage("\n[SYS] Waiting for AI\n");
+            }
+            // ai-begin.wav only if the speaker is free (button-release may still be playing)
+            if (!audioPlayer.isPlaying()) {
+                audioPlayer.play("/ai-begin.wav");
+            }
             // waitingAiTimeout.start();
         }
         // if (waitingAiTimeout.isElapsed()) {
@@ -439,7 +448,12 @@ void loop()
             afterAiResponseTimer.start();
             waitingAiTimeout.start();
         }
-        if (!audioPlayer.isAudioPlaying() && audioPlayer.isStreamBufferEmpty() && afterAiResponseTimer.isElapsed())
+        // Wait for: queue empty + DMA fully drained (isStreamDrained) + short timer.
+        // This avoids cutting off the tail of the last TTS audio chunk.
+        if (!audioPlayer.isAudioPlaying()
+            && audioPlayer.isStreamBufferEmpty()
+            && audioPlayer.isStreamDrained()
+            && afterAiResponseTimer.isElapsed())
         {
             changeState(State::FETCH_API_UPDATES);
             webSocket.disconnect();
@@ -534,9 +548,7 @@ void loop()
         if (sleepTimeout.isElapsed())
         {
             sleepTimeout.breakIt();
-            if (WAKE_UP_CAUSE != EspWakeUpCause::TIMER) {
-                screen.clear();
-            }
+            screen.clear();
             // if last connection was successful, during active mode, it will allow periodic wakeup
             powerController.startSleep(isAPIConnectionSuccessful);
         }
@@ -584,13 +596,18 @@ void loop()
             alarmTimeout.start();
         }
         if (alarmOverDelay.isElapsed()) {
+            if (!webSocket.connect()) {
+                changeState(State::CONNECTING_API);
+                break;
+            }
             httpController.updateTask();
-            String message = String(ENV::AI_WAKE_UP) + ":" + currentTask.argument;
+            String message = String(ENV::AI_WAKE_UP) + ":" + currentTask.id;
             webSocket.sendMessage(message.c_str());
+            audioPlayer.startStream(); 
             changeState(State::WAITING_AI_RESPONSE);
         } else if (isButtonPressed() && alarmOverDelay.isNotStarted()) {
             audioPlayer.stop();
-            screen.addMessage("[SYS] Ringstone stopped. Waiting for AI response.");
+            screen.displayMessage("[SYS] Calling... Waiting for AI.\n");
             alarmOverDelay.start();
         } else if (alarmTimeout.isElapsed()) {
             screen.addMessage("[SYS] Ringstone timeout.");
@@ -649,9 +666,12 @@ void setWebSocketCallback() {
             if (getState() != State::WAITING_AI_RESPONSE) {
                 changeState(State::WAITING_AI_RESPONSE);
             }
+        } else if (api_message == ENV::AI_WAKE_UP) {
+            
         } else if (api_message == ENV::AI_TEXT_END || api_message == ENV::AI_TTS_END) {
             if (api_message == ENV::AI_TTS_END) {
-                // Push sentinel so PLAY_RESPONSE knows when all audio chunks are played
+                // Sentinel in the queue: pcmTask() clears ttsBusy when it processes it.
+                // PLAY_RESPONSE then detects !isAudioPlaying() && isStreamBufferEmpty().
                 audioPlayer.endStream();
             }
             ai_text_finished = ai_text_finished || (api_message == ENV::AI_TEXT_END);

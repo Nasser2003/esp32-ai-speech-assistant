@@ -163,6 +163,9 @@ bool AudioRecorder::stopRecording()
 
     isRecording = false;
 
+    // Switch I2S back to TX (speaker) immediately so play() can start without delay
+    manager.activateTX();
+
     Serial.printf(
         "[AudioRecorder] Recording finished: %u samples (~%.2fs)\n",
         static_cast<unsigned>(samplesWritten),

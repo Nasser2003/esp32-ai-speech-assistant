@@ -15,7 +15,9 @@ AudioPlayer::AudioPlayer(I2SAudioManager& manager)
       audioPlaying(false),
       wavPlaying(false),
       stopRequested(false),
-      ttsBusy(false)
+      ttsBusy(false),
+      isDraining(false),
+      drainStartMs(0)
 {
     filePath[0] = '\0';
 }
@@ -182,7 +184,9 @@ void AudioPlayer::stop()
 
     audioPlaying = false;
     streamPlaying = false;
-    // wavPlaying repasse à false tout seul quand filePlaybackTask() se termine.
+    wavPlaying = false;
+    ttsBusy = false;
+    isDraining = false;
 }
 
 void AudioPlayer::setVolume(uint8_t volume) {
@@ -219,6 +223,8 @@ bool AudioPlayer::startStream()
     streamEnded = false;
     stopRequested = false;
     streamPlaying = true;
+    ttsBusy = false;
+    isDraining = false;
 
     Serial.println("PCM stream démarré");
     return true;
@@ -230,11 +236,11 @@ bool AudioPlayer::pushStream(const uint8_t* data, size_t length)
         return false;
     }
 
-    ttsBusy = true;
-
     if (data == nullptr || length == 0) {
         return false;
     }
+
+    ttsBusy = true;
 
     static AudioChunk chunk;
 
@@ -285,6 +291,12 @@ bool AudioPlayer::isStreamBufferEmpty() const
     return uxQueueMessagesWaiting(pcmQueue) == 0;
 }
 
+bool AudioPlayer::isStreamDrained() const
+{
+    if (!isDraining) return true; // no TTS was playing, nothing to drain
+    return (millis() - drainStartMs) >= DMA_DRAIN_MS;
+}
+
 // ======================================================
 // PCM TASK — consommateur unique : fichiers ET stream TTS
 // ======================================================
@@ -312,16 +324,29 @@ void AudioPlayer::pcmTask()
         if (xQueueReceive(pcmQueue, chunk, portMAX_DELAY) == pdTRUE) {
 
             if (chunk->length == 0) {
+                // Sentinel: all PCM data has been handed to i2s_write().
+                // Do NOT call i2s_zero_dma_buffer() here — the DMA hardware still
+                // has the last ~350 ms of audio to output. Let it drain naturally.
                 Serial.println("[PCM] Sentinel received — batch done");
-                i2s_zero_dma_buffer(I2S_NUM_0);
                 audioPlaying = false;
                 streamEnded = false;
                 ttsBusy = false;
+                isDraining = true;
+                drainStartMs = millis();
                 continue;
             }
 
             audioPlaying = true;
             applyVolume(chunk->data, chunk->length / sizeof(int16_t));
+
+            // Ensure TX mode: recording (activateRX) may have left I2S in RX mode
+            if (manager.getCurrentMode() != I2SAudioManager::Mode::TX) {
+                if (!manager.activateTX()) {
+                    Serial.println("[PCM] Failed to switch to TX");
+                    audioPlaying = false;
+                    continue;
+                }
+            }
 
             size_t bytesWritten = 0;
             esp_err_t err = i2s_write(
