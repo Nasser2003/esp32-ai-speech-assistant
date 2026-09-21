@@ -11,6 +11,11 @@ void Timer::start(uint32_t durationMs) {
     duration = durationMs;
 }
 
+void Timer::reset() {
+    startTime = 0;
+    duration = initialDuration;
+}
+
 void Timer::setDuration(uint32_t durationMs) {
     duration = durationMs;
 }

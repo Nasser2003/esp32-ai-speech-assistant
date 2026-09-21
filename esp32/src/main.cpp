@@ -97,16 +97,16 @@ void setup()
     pinMode(ENV::BUTTON_PIN, INPUT_PULLUP);
     ledcSetup(0, 5000, 8); // to use PWM feature on the led
     ledcAttachPin(ENV::BLUE_LED, 0); // PWM way to setup pinMode
+    WAKE_UP_CAUSE = powerController.getWakeUpCause();
 }
 
 void loop()
 {
     switch (getState())
     {
-    case State::NONE:
+    case State::PRE_INIT:
         if (runOnceOnStateChange()) 
         {
-            WAKE_UP_CAUSE = powerController.getWakeUpCause();
             if (WAKE_UP_CAUSE == EspWakeUpCause::GPIO) 
             {
                 Serial.println("[WAKEUP] Wakeup cause: GPIO");
@@ -115,6 +115,9 @@ void loop()
                 initTimer.setDuration(0);
                 initbatteryTimer.setDuration(0);
                 preInitTimer.start();
+                connectingTimer.reset();
+                connectedWifiTimer.reset();
+                enterSleepModeTimer.reset();
             } 
             else if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) 
             {
@@ -630,6 +633,13 @@ void loop()
         screen.update();
         webSocket.update();
         powerController.update();
+
+        bool PRESSED_DURING_WAKEUP_BY_TIMER_SLEEP = isButtonPressed() && WAKE_UP_CAUSE == EspWakeUpCause::TIMER;
+        if (PRESSED_DURING_WAKEUP_BY_TIMER_SLEEP) {
+            // WAKING UP IN GPIO MODE AS IF THE USER PRESSED THE BUTTON DURING SLEEP MODE
+            WAKE_UP_CAUSE = EspWakeUpCause::GPIO;
+            changeState(State::PRE_INIT);
+        }
     }
 
     vTaskDelay(1); // Yield to other tasks
@@ -711,7 +721,7 @@ void setWifiCallback() {
             State s = getState();
             // Ignore disconnect events during states that intentionally manage WiFi
             if (s == State::BLE_PROVISIONING || s == State::CONNECTING_WIFI ||
-                s == State::NONE || s == State::INIT) {
+                s == State::PRE_INIT || s == State::INIT) {
                 Serial.println("[WiFi] Disconnected (expected, ignoring)");
                 break;
             }

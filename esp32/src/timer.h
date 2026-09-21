@@ -9,9 +9,11 @@ enum class TimerState {
 
 class Timer {
 public:
-    Timer(uint32_t durationMs) : startTime(0), duration(durationMs) {}
+    Timer(uint32_t durationMs) : startTime(0), duration(durationMs), initialDuration(durationMs) {}
 
     void setDuration(uint32_t durationMs);
+
+    void reset();
 
     void start(uint32_t durationMs = -1);
 
@@ -28,6 +30,7 @@ public:
 private:
     uint32_t startTime;
     uint32_t duration;
+    const uint32_t initialDuration;
 
     TimerState getState() const;
 };

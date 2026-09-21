@@ -5,7 +5,7 @@
 //----------------------------------------------------------
 
 enum class State {
-    NONE,       // Used to initialize the value of "lastState", so that the first state change can be detected
+    PRE_INIT,       // Used to initialize the value of "lastState", so that the first state change can be detected
     INIT,           // When esp POWERED ON, or RESET
     CONNECTING_WIFI, // When esp is trying to connect to the wifi network
     CONNECTED_WIFI,  // When esp is connected to the wifi network
@@ -33,7 +33,7 @@ enum class RecordedState {
 
 const char* stateToString(State state) {
     switch (state) {
-    case State::NONE:       return "NONE";
+    case State::PRE_INIT:       return "PRE_INIT";
     case State::INIT:           return "INIT";
     case State::CONNECTING_WIFI: return "CONNECTING_WIFI";
     case State::CONNECTED_WIFI:  return "CONNECTED_WIFI";
@@ -60,8 +60,8 @@ const char* stateToString(State state) {
 // CLASS ---------------------------------------------------
 //----------------------------------------------------------
 
-State _state = State::NONE;
-State _lastState = State::NONE;
+State _state = State::PRE_INIT;
+State _lastState = State::PRE_INIT;
 RecordedState _recordedState = RecordedState::SENDING_AUDIO;
 bool _isRunOnce = false; // Used to run code only once when the state changes, because the loop() function runs continuously
 
