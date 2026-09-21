@@ -2,10 +2,11 @@ from fastapi import WebSocket
 from piper import PiperVoice
 from simple_websocket.errors import ConnectionClosed
 
+from langdetect import detect
 from services.audio_process_utils import resample_audio
 from databases.redis_db import RedisDatabase
 from config import ( REDIS_KEY_PREFIX_AI_TTS, SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, 
-    LANGUAGE_MAP, REDIS_KEY_PREFIX_LANGUAGE, TTS_CHUNK_SIZE )
+    LANGUAGE_MAP, TTS_CHUNK_SIZE )
 
 # purpose: send ai text answer to the client
 async def worker_ai_tts(just_id, client_ws: WebSocket, redis_db: RedisDatabase): 
@@ -33,10 +34,8 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_db: RedisDatabase):
                 break
             else:
                 # Determine the segment language for TTS synthesis
-                lang = await redis_db.get_majoritary(REDIS_KEY_PREFIX_LANGUAGE + just_id)
-                await redis_db.setTTL(REDIS_KEY_PREFIX_LANGUAGE + just_id)
-                if lang is None:
-                    lang = "en"
+                lang = detect(ai_answer_str)
+                print(f"language detected for TTS: {lang}")
                 config = LANGUAGE_MAP.get(lang)
                 if config is not None:
                     lang_path =config.path
@@ -49,6 +48,7 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_db: RedisDatabase):
                         audio_bytes = resample_audio(audio_bytes, sample_rate, 16_000)
                         for i in range(0, len(audio_bytes), TTS_CHUNK_SIZE):
                             await client_ws.send_bytes(audio_bytes[i:i + TTS_CHUNK_SIZE])
+                            # print(f"[WORKER AI TTS] Sent audio chunk of size {len(audio_bytes[i:i + TTS_CHUNK_SIZE])} bytes for {just_id}")
 
     except ConnectionClosed as e:
         print(f"[WORKER AI TTS] WebSocket closed: {e}")

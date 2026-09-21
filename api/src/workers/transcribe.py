@@ -2,7 +2,7 @@ from databases.redis_db import RedisDatabase
 from services.transcriptor import Transcriptor
 from config import (REDIS_KEY_PREFIX_TRANSCRIPTION, SIGNAL_TRANSCRIPTION_START, SIGNAL_TRANSCRIPTION_END, 
     REDIS_KEY_PREFIX_RECORD, SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, TRANSCRIPTION_CHUNK_SIZE, #
-    TRANSCRIPTION_WINDOW_SIZE, VOICE_LANGUAGE, REDIS_KEY_PREFIX_LANGUAGE)
+    TRANSCRIPTION_WINDOW_SIZE, VOICE_LANGUAGE)
 import asyncio
 from services.test_utils import test_received_audio
 
@@ -39,7 +39,6 @@ async def worker_transcribe(just_id: str, redis_db : RedisDatabase, transcriptor
     new_segment_ready_for_transcription = False
     segment_counter = 0
     trans_key = REDIS_KEY_PREFIX_TRANSCRIPTION + just_id
-    lang_key = REDIS_KEY_PREFIX_LANGUAGE + just_id
     print(f"[WORKER TRANS] Started: {trans_key}")
     
     temp_wav = b""
@@ -97,10 +96,6 @@ async def worker_transcribe(just_id: str, redis_db : RedisDatabase, transcriptor
                 transcriptor.transcribe, segment_to_transcribe, lang
             ):
                 print(f"[WORKER-TRANS] Transcription result for segment {segment_counter}: {words} (lang: {lang})")
-                await redis_db.r_push_expire(
-                    lang_key, 
-                    lang
-                )
                 await redis_db.r_push_expire(
                     trans_key, 
                     f"{segment_counter}:{words}"

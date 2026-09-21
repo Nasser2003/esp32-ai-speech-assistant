@@ -1,6 +1,6 @@
 import ollama
 from databases.redis_db import RedisDatabase
-from config import (REDIS_KEY_PREFIX_TRANSCRIPTION, SIGNAL_TRANSCRIPTION_START, 
+from config import (REDIS_KEY_PREFIX_TRANSCRIPTION, SIGNAL_AI_WAKE_UP, SIGNAL_TRANSCRIPTION_START, 
     SIGNAL_TRANSCRIPTION_END, REDIS_KEY_PREFIX_AI_TTS, 
     REDIS_KEY_PREFIX_AI_TEXT, SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, 
     SIGNAL_AI_TEXT_START, SIGNAL_AI_TEXT_END, OLLAMA_CHAT_MODEL)
@@ -16,10 +16,12 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
         ai_tts_key = REDIS_KEY_PREFIX_AI_TTS + just_id
         ai_text_key = REDIS_KEY_PREFIX_AI_TEXT + just_id
         question = ""
+        
 
         while True:
             # check for transcriptions
             result = await redis_db.blpop(trans_key)
+            
             if result is None:
                 break
             else:
@@ -34,6 +36,10 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
                 await client_ws.send_text(SIGNAL_TRANSCRIPTION_START)
             elif transcription_str == SIGNAL_TRANSCRIPTION_END:
                 await client_ws.send_text(SIGNAL_TRANSCRIPTION_END)
+                break
+            elif transcription_str.startswith(SIGNAL_AI_WAKE_UP):
+                question = transcription_str.split(":", 1)[1]
+                await client_ws.send_text(SIGNAL_AI_WAKE_UP)
                 break
             else:
                 id_seg, text = transcription_str.split(":", 1)
@@ -53,6 +59,9 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
         await redis_db.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_END)
     except ConnectionClosed as e:
         print(f"[WORKER AI ASK] WebSocket closed: {e}")
+    
+    except Exception as e:
+        print(f"[WORKER AI ASK] Exception occurred: {e}")
 
     finally:
         print("[WORKER AI ASK] Worker finished")

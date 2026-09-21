@@ -13,10 +13,10 @@ from datetime import datetime, timezone
 
 from dto.task_dto import TaskUpdate
 from databases.postgres_db import PostgresDatabase
-from config import (POSTGRES_DB, POSTGRES_HOST, POSTGRES_PASSWORD, POSTGRES_PORT, POSTGRES_USER, REDIS_TTL_EXPIRE_TIME, REDIS_HOST, REDIS_KEY_PREFIX_RECORD, SIGNAL_AI_WAKE_UP, 
-    SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, 
-    TRANSCRIPTION_MODEL, REDIS_PORT, OLLAMA_URL, API_WEBSOCKET_PATH,
-    VOICE_LANGUAGE)
+from config import (POSTGRES_DB, POSTGRES_HOST, POSTGRES_PASSWORD, POSTGRES_PORT, POSTGRES_USER, 
+    REDIS_KEY_PREFIX_TRANSCRIPTION, REDIS_TTL_EXPIRE_TIME, REDIS_HOST, REDIS_KEY_PREFIX_RECORD, 
+    SIGNAL_AI_WAKE_UP, SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, 
+    TRANSCRIPTION_MODEL, REDIS_PORT, OLLAMA_URL, API_WEBSOCKET_PATH)
 from dto.question import Question
 from services.ollama_service import ask_ai
 from databases.redis_db import RedisDatabase
@@ -98,7 +98,7 @@ def home():
 
 
 @app.websocket(API_WEBSOCKET_PATH)
-async def websocket(client_ws: WebSocket):
+async def websocket(client_ws: WebSocket, db: postgres_dep):
     just_id = shortuuid.uuid()
     audio_stream_id = REDIS_KEY_PREFIX_RECORD + just_id
     supervisor_task = None
@@ -112,7 +112,7 @@ async def websocket(client_ws: WebSocket):
             IS_RECORDING_START = IS_SIGNAL and message["text"] == SIGNAL_RECORDING_START
             IS_RECORDING_END = IS_SIGNAL and message["text"] == SIGNAL_RECORDING_END
             IS_WEBSOCKET_CLOSE = (message["type"] == "websocket.disconnect")
-            IS_AI_WAKE_UP = IS_SIGNAL and message["text"] == SIGNAL_AI_WAKE_UP
+            IS_AI_WAKE_UP = IS_SIGNAL and message["text"].startswith(SIGNAL_AI_WAKE_UP)
             
             if message is None:
                 break
@@ -140,6 +140,32 @@ async def websocket(client_ws: WebSocket):
                 print(f"[WS] WebSocket close signal received for {just_id}", flush=True)
                 # await client_ws.close()
                 break
+            elif IS_AI_WAKE_UP:
+                print(f"[WS] Wake up started for {just_id}", flush=True)
+                
+                task_id = message["text"].split(":")[1]
+                trans_key = REDIS_KEY_PREFIX_TRANSCRIPTION + just_id
+                context = db.query(Task) \
+                    .filter(Task.id == task_id) \
+                    .first()
+                    
+                if context is None or context.argument is None:
+                    print(f"[WS] No context found for wake up task {task_id}", flush=True)
+                    continue
+                
+                # Push a value to indicate the end of the session
+                worker_tasks = [
+                    # thread for asking ai
+                    asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia)),
+                    # thread for sending ai tts audio
+                    asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_db)),
+                    # thread for sending ai answer
+                    asyncio.create_task(worker_ai_answer(just_id, client_ws, redis_db)),
+                ]
+                supervisor_task = asyncio.create_task(
+                    terminate_session_if_workers_done(worker_tasks, client_ws, just_id)
+                )
+                await redis_db.r_push_expire(trans_key, SIGNAL_AI_WAKE_UP + ":" + context.argument)  
             elif IS_BYTES:
                 audio_bytes = message["bytes"]
                 print(f"[WS] Received audio bytes for {just_id}, length: {len(audio_bytes)}", flush=True)
