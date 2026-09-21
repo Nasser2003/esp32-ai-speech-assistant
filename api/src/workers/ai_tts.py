@@ -35,7 +35,7 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_db: RedisDatabase):
             else:
                 # Determine the segment language for TTS synthesis
                 lang = detect(ai_answer_str)
-                print(f"language detected for TTS: {lang}")
+                # print(f"language detected for TTS: {lang}")
                 config = LANGUAGE_MAP.get(lang)
                 if config is not None:
                     lang_path =config.path

@@ -18,12 +18,13 @@
 ## DOING
 
 - implement tasks in ESP32 (alarm, change volume, message from ai) with its arguments
+- inject in the model the features it can have access to
 
 ## TODO
 
 ### task execution
 
-- inject in the model the features it can have access to
+- give ESP32 context (battery, time(from api), volume)
 - find a way to make the model execute some tasks (produce special commands and intercept by the API)
 - learn freeCAD to create a design for the device
 
