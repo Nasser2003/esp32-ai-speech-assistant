@@ -22,6 +22,7 @@ struct ENV { // constexpr + const => mendatory for char* type, optional for int 
     // constants
     static constexpr const int WAKEUP_INTERVAL = 10000; // seconds
     static constexpr const int SLEEP_TIMEOUT = 30000; // seconds
+    static constexpr const uint32_t LOCATION_TIME_EXPIRATION_MS = 10 * 60 * 1000; // 10 minutes (ms)
 
     // Pins
     static constexpr const int BUTTON_PIN = 5;

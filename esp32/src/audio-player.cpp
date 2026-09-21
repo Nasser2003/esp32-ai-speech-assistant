@@ -202,8 +202,8 @@ void AudioPlayer::setVolume(uint8_t volume) {
     if (volume > 100) {
         volume = 100;
     }
-    if (volume < 1) {
-        volume = 1;
+    if (volume < 0) {
+        volume = 0;
     }
     volumeGain = static_cast<float>(volume) / 100.0f;
 

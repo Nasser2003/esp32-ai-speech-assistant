@@ -33,7 +33,7 @@ SinusPulse blueLedPulse(1, 270);
 WebsocketController webSocket(ENV::API_HOST, ENV::API_PORT, ENV::API_WEBSOCKET_PATH);
 HttpController httpController(ENV::API_HOST, ENV::API_PORT);
 PowerController powerController(ENV::BATTERY_PIN, ENV::WAKEUP_INTERVAL, ENV::BUTTON_PIN, 1000);
-LocationTimeApi locationTimeApi;
+LocationTimeApi locationTimeApi(ENV::LOCATION_TIME_EXPIRATION_MS);
 
 // Timers for state transitions and timeouts
 Timer preInitTimer(10);
@@ -151,6 +151,7 @@ void loop()
         {
             updateTimer.start();
             initComponents();
+            locationTimeApi.checkExpiration();
 
             screen.displayMessage("Initializing...");
             

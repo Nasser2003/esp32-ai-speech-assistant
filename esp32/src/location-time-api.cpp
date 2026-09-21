@@ -2,24 +2,196 @@
 
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <time.h>
+#include <sys/time.h>
 
-LocationTimeApi::LocationTimeApi()
+// RTC memory survives deep sleep as long as power is maintained
+RTC_DATA_ATTR static uint32_t rtcSavedEpoch = 0;
+RTC_DATA_ATTR static uint32_t rtcSavedMillis = 0;
+
+LocationTimeApi::LocationTimeApi(uint32_t expirationMs)
+    : expirationMs(expirationMs), savedEpoch(0)
 {
     locationTime.valid = false;
     locationTime.latitude = 0.0f;
     locationTime.longitude = 0.0f;
 }
 
+void LocationTimeApi::setExpiration(uint32_t ms)
+{
+    expirationMs = ms;
+}
+
 bool LocationTimeApi::begin()
 {
+    // 1. Try to use valid persistent cache (without hitting HTTP API)
+    if (loadFromNvs()) {
+        if (refreshTimeFromRtc()) {
+            Serial.printf(
+                "[LocationTime] Using persistent cache (time: %s, loc: %s)\n",
+                locationTime.dateTime.c_str(),
+                locationTime.location.c_str()
+            );
+            return true;
+        } else {
+            Serial.println("[LocationTime] Persistent cache expired or RTC lost");
+            clear();
+        }
+    }
+
+    // 2. Cache not available or expired: do real HTTP + NTP request
     if (WiFi.status() != WL_CONNECTED) {
-        // Serial.println("[LocationTime] WiFi not connected");
+        Serial.println("[LocationTime] WiFi not connected, cannot fetch new data");
         return false;
     }
 
     return update();
+}
+
+bool LocationTimeApi::checkExpiration()
+{
+    if (!loadFromNvs()) {
+        return true; // Nothing in cache
+    }
+
+    time_t now = time(nullptr);
+    // If system time was reset (cold reboot before NTP), RTC is lost
+    if (now < 1000000000) {
+        Serial.println("[LocationTime] RTC time reset/invalid, clearing persistent cache");
+        clear();
+        return true;
+    }
+
+    int64_t elapsedSec = (int64_t)now - (int64_t)savedEpoch;
+    uint64_t elapsedMs = (elapsedSec > 0) ? ((uint64_t)elapsedSec * 1000ULL) : UINT64_MAX;
+
+    if (elapsedMs >= expirationMs || elapsedSec < 0) {
+        Serial.printf(
+            "[LocationTime] Cache expired (%llu s >= %u s). Clearing persistent data.\n",
+            (unsigned long long)elapsedSec,
+            expirationMs / 1000
+        );
+        clear();
+        return true;
+    }
+
+    Serial.printf(
+        "[LocationTime] Cache valid (age: %llu s, remaining: %llu s)\n",
+        (unsigned long long)elapsedSec,
+        (unsigned long long)((expirationMs / 1000) - elapsedSec)
+    );
+    return false;
+}
+
+void LocationTimeApi::clear()
+{
+    Preferences prefs;
+    if (prefs.begin("loc_time", false)) {
+        prefs.clear();
+        prefs.end();
+    }
+
+    rtcSavedEpoch = 0;
+    rtcSavedMillis = 0;
+    savedEpoch = 0;
+
+    locationTime.valid = false;
+    locationTime.dateTime = "";
+    locationTime.location = "";
+    locationTime.timezone = "";
+    locationTime.latitude = 0.0f;
+    locationTime.longitude = 0.0f;
+
+    Serial.println("[LocationTime] Persistent data cleared");
+}
+
+bool LocationTimeApi::saveToNvs()
+{
+    Preferences prefs;
+    if (!prefs.begin("loc_time", false)) {
+        Serial.println("[LocationTime] Failed to open NVS for writing");
+        return false;
+    }
+
+    prefs.putString("location", locationTime.location);
+    prefs.putString("timezone", locationTime.timezone);
+    prefs.putFloat("lat", locationTime.latitude);
+    prefs.putFloat("lon", locationTime.longitude);
+    prefs.putUInt("epoch", savedEpoch);
+    prefs.putBool("valid", true);
+    prefs.end();
+
+    rtcSavedEpoch = savedEpoch;
+    rtcSavedMillis = millis();
+
+    Serial.printf("[LocationTime] Saved to NVS (epoch: %u, loc: %s)\n", savedEpoch, locationTime.location.c_str());
+    return true;
+}
+
+bool LocationTimeApi::loadFromNvs()
+{
+    Preferences prefs;
+    if (!prefs.begin("loc_time", true)) {
+        return false;
+    }
+
+    bool valid = prefs.getBool("valid", false);
+    if (!valid) {
+        prefs.end();
+        return false;
+    }
+
+    locationTime.location = prefs.getString("location", "");
+    locationTime.timezone = prefs.getString("timezone", "");
+    locationTime.latitude = prefs.getFloat("lat", 0.0f);
+    locationTime.longitude = prefs.getFloat("lon", 0.0f);
+    savedEpoch = prefs.getUInt("epoch", 0);
+    prefs.end();
+
+    if (locationTime.location.isEmpty() || locationTime.timezone.isEmpty() || savedEpoch == 0) {
+        locationTime.valid = false;
+        return false;
+    }
+
+    locationTime.valid = true;
+    return true;
+}
+
+bool LocationTimeApi::refreshTimeFromRtc()
+{
+    time_t now = time(nullptr);
+    if (now < 1000000000 || savedEpoch == 0) {
+        return false;
+    }
+
+    int64_t elapsedSec = (int64_t)now - (int64_t)savedEpoch;
+    if (elapsedSec < 0 || ((uint64_t)elapsedSec * 1000ULL) >= expirationMs) {
+        return false; // Expired
+    }
+
+    // Apply delay to saved base value: currentEpoch = savedEpoch + elapsedSec
+    time_t currentEpoch = savedEpoch + elapsedSec;
+
+    applyPosixTz(locationTime.timezone);
+
+    struct tm timeInfo;
+    if (!localtime_r(&currentEpoch, &timeInfo)) {
+        return false;
+    }
+
+    char dateTime[20];
+    strftime(
+        dateTime,
+        sizeof(dateTime),
+        "%Y-%m-%d %H:%M:%S",
+        &timeInfo
+    );
+
+    locationTime.dateTime = dateTime;
+    locationTime.valid = true;
+    return true;
 }
 
 bool LocationTimeApi::update()
@@ -44,6 +216,8 @@ bool LocationTimeApi::update()
         return false;
     }
 
+    savedEpoch = time(nullptr);
+
     char dateTime[20];
 
     strftime(
@@ -54,8 +228,10 @@ bool LocationTimeApi::update()
     );
 
     locationTime.dateTime = dateTime;
-
     locationTime.valid = true;
+
+    // Save to persistent storage (NVS + RTC)
+    saveToNvs();
 
     Serial.println("========== Location / Time ==========");
     Serial.printf(
@@ -162,19 +338,6 @@ bool LocationTimeApi::fetchLocation()
 
 bool LocationTimeApi::syncTime()
 {
-    /*
-     * ipapi returns an IANA timezone such as:
-     *
-     * Europe/Brussels
-     * America/New_York
-     * Asia/Tokyo
-     *
-     * ESP32 configTzTime() expects a POSIX TZ string.
-     *
-     * For now, use the timezone returned by the API
-     * through a small mapping.
-     */
-
     const String& timezone = locationTime.timezone;
 
     String posixTimezone =
@@ -205,17 +368,19 @@ bool LocationTimeApi::syncTime()
     return true;
 }
 
+void LocationTimeApi::applyPosixTz(const String& timezone)
+{
+    String posix = timezoneToPosix(timezone);
+    if (!posix.isEmpty()) {
+        setenv("TZ", posix.c_str(), 1);
+        tzset();
+    }
+}
+
 String LocationTimeApi::timezoneToPosix(
     const String& timezone
 )
 {
-    /*
-     * Add mappings as needed.
-     *
-     * Belgium / France / Germany / Netherlands:
-     * CET-1CEST,M3.5.0/2,M10.5.0/3
-     */
-
     if (
         timezone == "Europe/Brussels" ||
         timezone == "Europe/Paris" ||
