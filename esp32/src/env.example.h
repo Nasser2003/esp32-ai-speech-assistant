@@ -28,12 +28,14 @@ struct ENV { // constexpr + const => mendatory for char* type, optional for int 
     static constexpr const int BUTTON_PIN = 5;
     static constexpr const int BATTERY_PIN = 4;
     static constexpr const int BLUE_LED = 8;
+
     struct I2S_PINS {
         static constexpr const int BCLK = 1;       // shared clock (MIC SCK + SPEAKER BLCK)
         static constexpr const int WS = 0;          // shared word select (MIC MIC WS + SPEAKER LRC)
         static constexpr const int MIC_SD = 10;      // mic data in (INMP441 SD)
         static constexpr const int SPK_DOUT = 3;    // speaker data out (MAX98357A DIN)
     };
+    
     struct SCREEN_PINS {
         static constexpr const int SDA = 6;
         static constexpr const int SCK = 7;

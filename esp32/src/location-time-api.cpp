@@ -9,7 +9,6 @@
 
 // RTC memory survives deep sleep as long as power is maintained
 RTC_DATA_ATTR static uint32_t rtcSavedEpoch = 0;
-RTC_DATA_ATTR static uint32_t rtcSavedMillis = 0;
 
 LocationTimeApi::LocationTimeApi(uint32_t expirationMs)
     : expirationMs(expirationMs), savedEpoch(0)
@@ -94,7 +93,6 @@ void LocationTimeApi::clear()
     }
 
     rtcSavedEpoch = 0;
-    rtcSavedMillis = 0;
     savedEpoch = 0;
 
     locationTime.valid = false;
@@ -124,7 +122,6 @@ bool LocationTimeApi::saveToNvs()
     prefs.end();
 
     rtcSavedEpoch = savedEpoch;
-    rtcSavedMillis = millis();
 
     Serial.printf("[LocationTime] Saved to NVS (epoch: %u, loc: %s)\n", savedEpoch, locationTime.location.c_str());
     return true;

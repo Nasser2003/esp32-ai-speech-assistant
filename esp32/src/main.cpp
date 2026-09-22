@@ -298,6 +298,7 @@ void loop()
                 currentTask = task;
             } else {
                 Serial.printf("[STATE] No task available: %d\n", statusCode);
+                changeState(State::IDLE);
                 break;
             }
 
@@ -324,7 +325,14 @@ void loop()
             default:
                 break;
             }
+
+            if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
+                changeState(State::SLEEP_MODE);
+            } else {
+                changeState(State::IDLE);
+            }
         }
+
         if (fetchTimer.isElapsed()) {
             if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
                 changeState(State::SLEEP_MODE);
@@ -439,7 +447,7 @@ void loop()
         if (runOnceOnStateChange())
         {
             if (getLastState() != State::AI_RINGSTONE) {
-                screen.addMessage("\n[SYS] Waiting for AI\n");
+                screen.addMessage("\n> ");
             }
             // ai-begin.wav only if the speaker is free (button-release may still be playing)
             if (!audioPlayer.isPlaying()) {
@@ -710,7 +718,7 @@ void setWebSocketCallback() {
                 ai_tts_finished  = false;
             }
         } else {
-            screen.addMessage(api_message);
+            screen.addMessage(api_message, true);
         }
     });
 }
