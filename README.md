@@ -27,7 +27,8 @@ In this document, I will describe each step of developping this project in order
 - Create my custom AI image, define the system prompt (Avoid markdown format, give the context, some knowledge)
 - Implement LLM function calling in order to upgrade my model capacity to execute orders
     (Change volume, Sleep, turn on Blue Led, planned alarm, wake up ai)
-- Use a library to detect the language of an ai answer and use the appropriate TTS Voice
+- Use a library (`lang_detector`) to detect the language of an ai answer and use the appropriate TTS Voice
+- upgrade language detection by replacing `lang_detector` python library with `fasttext-numpy2` for more accuracy in text language prediction
 
 ## 1. ESP32
 

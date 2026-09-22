@@ -61,6 +61,7 @@ SIGNAL_AI_TTS_START = getenv_checked("SIGNAL_AI_TTS_START")
 SIGNAL_AI_TTS_END = getenv_checked("SIGNAL_AI_TTS_END")
 SIGNAL_AI_WAKE_UP = getenv_checked("SIGNAL_AI_WAKE_UP")
 SIGNAL_ARGUMENT = getenv_checked("SIGNAL_ARGUMENT")
+SIGNAL_BUFFER_FREE = "/BUFFER FREE"
 
 MONTH = ["January", "February", "March", "April", "May", "June", "July",
         "August", "September", "October", "November", "December"]

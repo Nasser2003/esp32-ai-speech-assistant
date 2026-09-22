@@ -1,6 +1,8 @@
 # API
 api/.venv
 __pycache__
+api/data/*.bin
+api/data/test_received_audio.wav
 
 # ESP32
 .pio

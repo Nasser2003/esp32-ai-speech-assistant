@@ -5,21 +5,19 @@ from fastapi.responses import StreamingResponse
 import ollama
 import shortuuid
 import asyncio
-import time
-import wave
-from pathlib import Path
 from sqlalchemy.orm import Session
 from typing import Annotated
 from fastapi import Depends
 from datetime import datetime, timezone
 
+from services.lang_detector import LanguageDetector
 from services.ai_context_utils import ask_message
 from dto.task_dto import TaskUpdate
 from databases.postgres_db import PostgresDatabase
 from config import (POSTGRES_DB, POSTGRES_HOST, POSTGRES_PASSWORD, POSTGRES_PORT, POSTGRES_USER, 
     REDIS_KEY_PREFIX_TRANSCRIPTION, REDIS_TTL_EXPIRE_TIME, REDIS_HOST, REDIS_KEY_PREFIX_RECORD, 
     SIGNAL_AI_WAKE_UP, SIGNAL_ARGUMENT, SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, 
-    TRANSCRIPTION_MODEL, REDIS_PORT, OLLAMA_URL, API_WEBSOCKET_PATH)
+    TRANSCRIPTION_MODEL, REDIS_PORT, OLLAMA_URL, API_WEBSOCKET_PATH, SIGNAL_BUFFER_FREE)
 from dto.question import Question
 from services.ollama_service import ask_ai
 from databases.redis_db import RedisDatabase
@@ -29,7 +27,7 @@ from workers.ai_ask import worker_ai_ask
 from workers.ai_tts import worker_ai_tts
 from workers.ai_answer import worker_ai_answer
 from workers.worker_supervisor import terminate_session_if_workers_done
-from models.task import Task, TaskTypeEnum, TaskStatusEnum
+from models.task import Task, TaskStatusEnum
 
 app = FastAPI()
 
@@ -43,6 +41,7 @@ postgres_db = PostgresDatabase(
 )
 postgres_dep = Annotated[Session, Depends(postgres_db.get_session)]
 transcriptor = Transcriptor(TRANSCRIPTION_MODEL)
+language_detector = LanguageDetector("data/lid.176.bin")
 
 
 @app.post('/ask')
@@ -106,6 +105,7 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
     audio_stream_id = REDIS_KEY_PREFIX_RECORD + just_id
     argument_id = SIGNAL_ARGUMENT + just_id
     supervisor_task = None
+    buffer_queue = asyncio.Queue()
     
     try:
         await client_ws.accept()
@@ -118,6 +118,7 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
             IS_WEBSOCKET_CLOSE = (message["type"] == "websocket.disconnect")
             IS_AI_WAKE_UP = IS_SIGNAL and message["text"] == SIGNAL_AI_WAKE_UP
             IS_ARGUMENT = IS_SIGNAL and message["text"].startswith(SIGNAL_ARGUMENT)
+            IS_BUFFER_FREE = IS_SIGNAL and message["text"].startswith(SIGNAL_BUFFER_FREE)
             
             if message is None:
                 break
@@ -149,7 +150,7 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
                     # thread for asking ai
                     asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia)),
                     # thread for sending ai tts audio
-                    asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_db)),
+                    asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_db, buffer_queue, language_detector)),
                     # thread for sending ai answer
                     asyncio.create_task(worker_ai_answer(just_id, client_ws, redis_db)),
                 ]
@@ -175,7 +176,7 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
                     # thread for asking ai
                     asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia)),
                     # thread for sending ai tts audio
-                    asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_db)),
+                    asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_db, buffer_queue, language_detector)),
                     # thread for sending ai answer
                     asyncio.create_task(worker_ai_answer(just_id, client_ws, redis_db)),
                 ]
@@ -183,7 +184,14 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
                     terminate_session_if_workers_done(worker_tasks, client_ws, just_id)
                 )
             
-                await redis_db.r_push_expire(trans_key, SIGNAL_AI_WAKE_UP)  
+                await redis_db.r_push_expire(trans_key, SIGNAL_AI_WAKE_UP)
+            elif IS_BUFFER_FREE:
+                # Route backpressure credit to worker_ai_tts
+                try:
+                    free_bytes = int(message["text"].split(":")[1])
+                    await buffer_queue.put(free_bytes)
+                except (IndexError, ValueError):
+                    print(f"[WS] Invalid BUFFER_FREE signal: {message['text']}", flush=True)
             elif IS_BYTES:
                 audio_bytes = message["bytes"]
                 print(f"[WS] Received audio bytes for {just_id}, length: {len(audio_bytes)}", flush=True)
