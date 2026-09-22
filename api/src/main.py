@@ -13,14 +13,15 @@ from typing import Annotated
 from fastapi import Depends
 from datetime import datetime, timezone
 
+from services.ai_context_utils import ask_message
 from dto.task_dto import TaskUpdate
 from databases.postgres_db import PostgresDatabase
 from config import (POSTGRES_DB, POSTGRES_HOST, POSTGRES_PASSWORD, POSTGRES_PORT, POSTGRES_USER, 
     REDIS_KEY_PREFIX_TRANSCRIPTION, REDIS_TTL_EXPIRE_TIME, REDIS_HOST, REDIS_KEY_PREFIX_RECORD, 
-    SIGNAL_AI_WAKE_UP, SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, 
+    SIGNAL_AI_WAKE_UP, SIGNAL_ARGUMENT, SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, 
     TRANSCRIPTION_MODEL, REDIS_PORT, OLLAMA_URL, API_WEBSOCKET_PATH)
 from dto.question import Question
-from services.ollama_service import ask_ai, ask_message
+from services.ollama_service import ask_ai
 from databases.redis_db import RedisDatabase
 from services.transcriptor import Transcriptor
 from workers.transcribe import worker_transcribe
@@ -103,6 +104,7 @@ def home():
 async def websocket(client_ws: WebSocket, db: postgres_dep):
     just_id = shortuuid.uuid()
     audio_stream_id = REDIS_KEY_PREFIX_RECORD + just_id
+    argument_id = SIGNAL_ARGUMENT + just_id
     supervisor_task = None
     
     try:
@@ -111,18 +113,32 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
             message = await client_ws.receive()
             IS_SIGNAL ="text" in message
             IS_BYTES = "bytes" in message
-            IS_RECORDING_START = IS_SIGNAL and message["text"].startswith(SIGNAL_RECORDING_START)
+            IS_RECORDING_START = IS_SIGNAL and message["text"] == SIGNAL_RECORDING_START
             IS_RECORDING_END = IS_SIGNAL and message["text"] == SIGNAL_RECORDING_END
             IS_WEBSOCKET_CLOSE = (message["type"] == "websocket.disconnect")
-            IS_AI_WAKE_UP = IS_SIGNAL and message["text"].startswith(SIGNAL_AI_WAKE_UP)
+            IS_AI_WAKE_UP = IS_SIGNAL and message["text"] == SIGNAL_AI_WAKE_UP
+            IS_ARGUMENT = IS_SIGNAL and message["text"].startswith(SIGNAL_ARGUMENT)
             
             if message is None:
                 break
-            if IS_RECORDING_START:
+            if IS_ARGUMENT:
+                arguments = json.loads(message["text"].split(":", 1)[1])
+                print(f"[WS] Received argument: {arguments}", flush=True)
+                IS_AI_WAKE_UP_CONTEXT = arguments.get("type") == SIGNAL_AI_WAKE_UP
+                
+                if IS_AI_WAKE_UP_CONTEXT:
+                    task_id = arguments.get("task_id")
+                    if not task_id:
+                        raise ValueError("No task ID found in arguments")
+                    context = db.query(Task) \
+                        .filter(Task.id == task_id) \
+                        .first()
+                    arguments["wake_up_context"] = context.argument if context else ""
+                    
+                arguments_str = json.dumps(arguments, ensure_ascii=False)
+                await redis_db.setKey(argument_id, arguments_str)
+            elif IS_RECORDING_START:
                 print(message["text"], flush=True)
-                esp32_info = json.loads(message["text"].split(":", 1)[1])
-                esp32_info["current_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                esp32_info_str = json.dumps(esp32_info, ensure_ascii=False)
                 
                 print(f"[WS] Recording started for {just_id}", flush=True)
                 # Push a value to indicate the end of the session
@@ -131,7 +147,7 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
                     # thread for audio transcription
                     asyncio.create_task(worker_transcribe(just_id, redis_db, transcriptor)),
                     # thread for asking ai
-                    asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia, esp32_info_str)),
+                    asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia)),
                     # thread for sending ai tts audio
                     asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_db)),
                     # thread for sending ai answer
@@ -142,33 +158,22 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
                 )
             elif IS_RECORDING_END:
                 print(f"[WS] Recording ended for {just_id}", flush=True)
-                await redis_db.r_push_expire(audio_stream_id, SIGNAL_RECORDING_END)  # Push a value to indicate the end of the session
+                
+                await redis_db.r_push_expire(audio_stream_id, SIGNAL_RECORDING_END)
             elif IS_WEBSOCKET_CLOSE:
                 print(f"[WS] WebSocket close signal received for {just_id}", flush=True)
                 # await client_ws.close()
                 break
             elif IS_AI_WAKE_UP:
                 print(message["text"], flush=True)
-                esp32_info = json.loads(message["text"].split(":", 1)[1])
-                esp32_info["current_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                task_id = esp32_info.get("task_id")
-                esp32_info_str = json.dumps(esp32_info, ensure_ascii=False)
-                
                 print(f"[WS] Wake up started for {just_id}", flush=True)
                 
                 trans_key = REDIS_KEY_PREFIX_TRANSCRIPTION + just_id
-                context = db.query(Task) \
-                    .filter(Task.id == task_id) \
-                    .first()
-                    
-                if context is None or context.argument is None:
-                    print(f"[WS] No context found for wake up task {task_id}", flush=True)
-                    continue
                 
                 # Push a value to indicate the end of the session
                 worker_tasks = [
                     # thread for asking ai
-                    asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia, esp32_info_str)),
+                    asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia)),
                     # thread for sending ai tts audio
                     asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_db)),
                     # thread for sending ai answer
@@ -177,7 +182,8 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
                 supervisor_task = asyncio.create_task(
                     terminate_session_if_workers_done(worker_tasks, client_ws, just_id)
                 )
-                await redis_db.r_push_expire(trans_key, SIGNAL_AI_WAKE_UP + ":" + context.argument)  
+            
+                await redis_db.r_push_expire(trans_key, SIGNAL_AI_WAKE_UP)  
             elif IS_BYTES:
                 audio_bytes = message["bytes"]
                 print(f"[WS] Received audio bytes for {just_id}, length: {len(audio_bytes)}", flush=True)

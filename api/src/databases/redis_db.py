@@ -10,6 +10,13 @@ class RedisDatabase:
 
     async def setTTL(self, key, ttl=None):
         await self.redis_client.expire(key, ttl if ttl is not None else self.ttl)
+        
+    async def setKey(self, key, value, ttl=None):
+        await self.redis_client.set(key, value)
+        await self.redis_client.expire(key, ttl if ttl is not None else self.ttl)
+    
+    async def getKey(self, key):
+        return await self.redis_client.get(key)
 
     async def r_push_expire(self, key, value, ttl = None):
         await self.redis_client.rpush(key, value)

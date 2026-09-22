@@ -33,7 +33,11 @@ async def async_generator_wrapper(sync_gen_func, *args, **kwargs):
         yield item
 
 # purpose: process audio chunks and transcribe them into text
-async def worker_transcribe(just_id: str, redis_db : RedisDatabase, transcriptor: Transcriptor): 
+async def worker_transcribe(
+    just_id: str,
+    redis_db: RedisDatabase,
+    transcriptor: Transcriptor,
+) -> None:
     remaining_audio = bytearray()
     segment_to_transcribe = b""
     new_segment_ready_for_transcription = False
@@ -100,6 +104,7 @@ async def worker_transcribe(just_id: str, redis_db : RedisDatabase, transcriptor
                     trans_key, 
                     f"{segment_counter}:{words}"
                 )
+            await redis_db.setKey(trans_key + "_lang", lang)
                 
         if audio == bytes(SIGNAL_RECORDING_START, 'utf-8'):
             await redis_db.r_push_expire(trans_key, SIGNAL_TRANSCRIPTION_START)

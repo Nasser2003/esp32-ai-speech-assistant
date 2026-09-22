@@ -5,13 +5,14 @@ from simple_websocket.errors import ConnectionClosed
 from langdetect import detect
 from services.audio_process_utils import resample_audio
 from databases.redis_db import RedisDatabase
-from config import ( REDIS_KEY_PREFIX_AI_TTS, SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, 
-    LANGUAGE_MAP, TTS_CHUNK_SIZE )
+from config import ( REDIS_KEY_PREFIX_AI_TTS, REDIS_KEY_PREFIX_TRANSCRIPTION, 
+    SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, LANGUAGE_MAP, TTS_CHUNK_SIZE )
 
 # purpose: send ai text answer to the client
 async def worker_ai_tts(just_id, client_ws: WebSocket, redis_db: RedisDatabase): 
     try:
         ai_tts_key = REDIS_KEY_PREFIX_AI_TTS + just_id
+        trans_key = REDIS_KEY_PREFIX_TRANSCRIPTION + just_id
         
         while True:
             result = await redis_db.blpop(ai_tts_key)
@@ -34,9 +35,15 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_db: RedisDatabase):
                 break
             else:
                 # Determine the segment language for TTS synthesis
-                lang = detect(ai_answer_str)
+                try:
+                    lang = detect(ai_answer_str)
+                except Exception as e:
+                    print(f"[WORKER AI TTS] Error detecting language: {e}")
+                    lang = await redis_db.getKey(ai_tts_key + "_lang")
+                if lang is None:
+                    lang = "en"
                 # print(f"language detected for TTS: {lang}")
-                config = LANGUAGE_MAP.get(lang)
+                config = LANGUAGE_MAP.get(str(lang))
                 if config is not None:
                     lang_path =config.path
                     sample_rate = config.sample_rate
