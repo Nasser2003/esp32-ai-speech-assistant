@@ -310,6 +310,12 @@ bool AudioPlayer::isPlaying() const { return wavPlaying || ttsBusy || audioPlayi
 bool AudioPlayer::isAudioPlaying() const { return isPlaying(); }
 bool AudioPlayer::isStreamPlaying() const { return streamPlaying; }
 
+
+size_t AudioPlayer::getFreeQueueBytes() const
+{
+    if (pcmQueue == nullptr) return 0;
+    return uxQueueSpacesAvailable(pcmQueue) * PCM_CHUNK_SIZE;
+}
 bool AudioPlayer::isStreamBufferEmpty() const
 {
     if (pcmQueue == nullptr) return true;

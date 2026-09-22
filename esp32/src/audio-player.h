@@ -23,6 +23,7 @@ public:
     // Returns true once the DMA has had enough time to output the last PCM chunk.
     // Call after isStreamBufferEmpty() to avoid cutting off the audio tail.
     bool isStreamDrained() const;
+    size_t getFreeQueueBytes() const;
 
     void setVolume(uint8_t volume);
     uint8_t getVolume() const;

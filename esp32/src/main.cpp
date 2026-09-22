@@ -416,6 +416,12 @@ void loop()
             changeRecordedState(RecordedState::SENDING_AUDIO);
             recorder.stopRecording();      // switches I2S back to TX
             audioPlayer.startStream();     // re-arm streamPlaying so TTS pushStream() works
+            {
+                // Send initial backpressure credit so API can start sending audio
+                size_t freeBytes = audioPlayer.getFreeQueueBytes();
+                std::string bufferSignal = std::string(ENV::BUFFER_FREE) + ":" + std::to_string(freeBytes);
+                webSocket.sendMessage(bufferSignal.c_str());
+            }
             audioPlayer.play("/button-release.wav");
             blueLedPulse.stopPulse();
             recordStopTimer.start();
@@ -625,7 +631,13 @@ void loop()
             String message = String(ENV::ARGUMENT) + ":" + generateEsp32InfoJson(ENV::AI_WAKE_UP, currentTask.id);
             webSocket.sendMessage(message.c_str());
             webSocket.sendMessage(ENV::AI_WAKE_UP);
-            audioPlayer.startStream(); 
+            audioPlayer.startStream();
+            {
+                // Send initial backpressure credit so API can start sending audio
+                size_t freeBytes = audioPlayer.getFreeQueueBytes();
+                std::string bufferSignal = std::string(ENV::BUFFER_FREE) + ":" + std::to_string(freeBytes);
+                webSocket.sendMessage(bufferSignal.c_str());
+            }
             changeState(State::WAITING_AI_RESPONSE);
         } else if (isButtonPressed() && alarmOverDelay.isNotStarted()) {
             audioPlayer.stop();
@@ -687,6 +699,10 @@ void setWebSocketCallback() {
                 reinterpret_cast<const uint8_t*>(data.data()),
                 data.size()
             );
+            // Backpressure: notify API of remaining free space in PCM queue
+            size_t freeBytes = audioPlayer.getFreeQueueBytes();
+            std::string bufferSignal = std::string(ENV::BUFFER_FREE) + ":" + std::to_string(freeBytes);
+            client.send(bufferSignal.c_str());
             return;
         }
 
