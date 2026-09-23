@@ -28,10 +28,9 @@ class SystemContext(Base):
         nullable=False,
     )
     content: Mapped[str] = mapped_column(String(5000), nullable=False)
-    device: Mapped[str | None] = mapped_column(String(31), nullable=True)
 
     messages: Mapped[list["Message"]] = relationship(
-        "Message", back_populates="system_context", cascade="all, delete-orphan"
+        "Message", back_populates="system_context"
     )
 
 
@@ -51,10 +50,9 @@ class Message(Base):
     )
     system: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("SYSTEMS.id", ondelete="CASCADE"),
+        ForeignKey("SYSTEMS.id", ondelete="NO ACTION", onupdate="NO ACTION"),
         nullable=False,
     )
-    device: Mapped[str | None] = mapped_column(String(31), nullable=True)
 
     system_context: Mapped["SystemContext"] = relationship(
         "SystemContext", back_populates="messages"

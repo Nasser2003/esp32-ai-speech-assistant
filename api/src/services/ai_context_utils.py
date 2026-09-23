@@ -133,40 +133,38 @@ TOOLS_JSON = [
 
 def get_or_create_system_context(
     db: Session,
-    device: str | None = None,
+    prompt_content: str = SYSTEM_PROMPT,
     context_type: ContextTypeEnum = ContextTypeEnum.SYSTEM,
 ) -> SystemContext:
-    query = db.query(SystemContext).filter(SystemContext.type == context_type)
-    if device is not None:
-        device_ctx = query.filter(SystemContext.device == device).first()
-        if device_ctx:
-            return device_ctx
+    latest_ctx = (
+        db.query(SystemContext)
+        .filter(SystemContext.type == context_type)
+        .order_by(SystemContext.id.desc())
+        .first()
+    )
 
-    default_ctx = query.filter(SystemContext.device.is_(None)).first()
-    if default_ctx:
-        return default_ctx
+    if latest_ctx and latest_ctx.content.strip() == prompt_content.strip():
+        return latest_ctx
 
-    # Fallback: create base system context if none exists in DB
     new_ctx = SystemContext(
         type=context_type,
-        content=SYSTEM_PROMPT,
-        device=None,
+        content=prompt_content.strip(),
     )
     db.add(new_ctx)
     db.commit()
     db.refresh(new_ctx)
+    print(f"[AI CONTEXT] New system prompt detected! Created SystemContext ID: {new_ctx.id}", flush=True)
     return new_ctx
 
 
 def get_recent_messages(
     db: Session,
-    system_id: int,
+    system_id: int | None = None,
     limit: int = 10,
-    device: str | None = None,
 ) -> list[Message]:
-    query = db.query(Message).filter(Message.system == system_id)
-    if device is not None:
-        query = query.filter((Message.device == device) | (Message.device.is_(None)))
+    query = db.query(Message)
+    if system_id is not None:
+        query = query.filter(Message.system == system_id)
     messages = (
         query.order_by(Message.created_at.desc(), Message.id.desc())
         .limit(limit)
@@ -176,12 +174,12 @@ def get_recent_messages(
     return messages
 
 
+
 def save_message(
     db: Session,
     system_id: int,
     role: RoleEnum,
     content: str,
-    device: str | None = None,
 ) -> Message | None:
     if not content or not content.strip():
         return None
@@ -189,7 +187,6 @@ def save_message(
         system=system_id,
         role=role,
         content=content.strip(),
-        device=device,
         created_at=datetime.now(timezone.utc),
     )
     db.add(msg)
@@ -198,13 +195,8 @@ def save_message(
     return msg
 
 
-def get_system_summary(db: Session, device: str | None = None) -> str | None:
-    query = db.query(SystemContext).filter(SystemContext.type == ContextTypeEnum.SUMMARY)
-    if device is not None:
-        dev_summary = query.filter(SystemContext.device == device).first()
-        if dev_summary and dev_summary.content:
-            return dev_summary.content
-    summary = query.filter(SystemContext.device.is_(None)).first()
+def get_system_summary(db: Session) -> str | None:
+    summary = db.query(SystemContext).filter(SystemContext.type == ContextTypeEnum.SUMMARY).first()
     return summary.content if summary and summary.content else None
 
 
@@ -248,9 +240,9 @@ def build_messages_with_context(
     esp32_info: str,
     message: str,
     limit: int = 10,
-    device: str | None = None,
+    prompt_content: str = SYSTEM_PROMPT,
 ) -> tuple[list[dict], int]:
-    sys_ctx = get_or_create_system_context(db, device=device)
+    sys_ctx = get_or_create_system_context(db, prompt_content=prompt_content)
     base_prompt = sys_ctx.content
 
     if "{esp32_info}" in base_prompt:
@@ -265,7 +257,7 @@ def build_messages_with_context(
         }
     ]
 
-    summary = get_system_summary(db, device=device)
+    summary = get_system_summary(db)
     if summary:
         messages.append(
             {
@@ -274,7 +266,7 @@ def build_messages_with_context(
             }
         )
 
-    recent_messages = get_recent_messages(db, system_id=sys_ctx.id, limit=limit, device=device)
+    recent_messages = get_recent_messages(db, limit=limit)
     for hist_msg in recent_messages:
         messages.append(
             {
@@ -298,10 +290,11 @@ def build_wakeup_messages_with_context(
     esp32_info: str,
     reason: str,
     limit: int = 10,
-    device: str | None = None,
+    prompt_content: str = SYSTEM_PROMPT,
 ) -> tuple[list[dict], int]:
-    sys_ctx = get_or_create_system_context(db, device=device)
+    sys_ctx = get_or_create_system_context(db, prompt_content=prompt_content)
     base_prompt = sys_ctx.content
+
 
     if "{esp32_info}" in base_prompt:
         system_content = base_prompt.format(esp32_info=esp32_info)
@@ -325,7 +318,7 @@ def build_wakeup_messages_with_context(
         }
     ]
 
-    summary = get_system_summary(db, device=device)
+    summary = get_system_summary(db)
     if summary:
         messages.append(
             {
@@ -334,7 +327,7 @@ def build_wakeup_messages_with_context(
             }
         )
 
-    recent_messages = get_recent_messages(db, system_id=sys_ctx.id, limit=limit, device=device)
+    recent_messages = get_recent_messages(db, limit=limit)
     for hist_msg in recent_messages:
         messages.append(
             {

@@ -84,12 +84,12 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
                 .filter(Task.id == arguments.get("task_id")) \
                 .scalar()
             full_question, system_id = build_wakeup_messages_with_context(
-                postgres_db, esp32_info, reason, limit=MAX_CONTEXT_MESSAGES, device=device_mac
+                postgres_db, esp32_info, reason, limit=MAX_CONTEXT_MESSAGES
             )
             user_prompt_to_save = f"[Wake-up topic]: {reason}" if reason else "[Wake-up interaction]"
         else:
             full_question, system_id = build_messages_with_context(
-                postgres_db, esp32_info, question, limit=MAX_CONTEXT_MESSAGES, device=device_mac
+                postgres_db, esp32_info, question, limit=MAX_CONTEXT_MESSAGES
             )
             user_prompt_to_save = question
             
@@ -115,7 +115,6 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
                     system_id=system_id,
                     role=RoleEnum.USER,
                     content=user_prompt_to_save,
-                    device=device_mac,
                 )
             if full_ai_answer and full_ai_answer.strip():
                 save_message(
@@ -123,8 +122,8 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
                     system_id=system_id,
                     role=RoleEnum.ASSISTANT,
                     content=full_ai_answer,
-                    device=device_mac,
                 )
+
 
     except ConnectionClosed as e:
         print(f"[WORKER AI ASK] WebSocket closed: {e}")
