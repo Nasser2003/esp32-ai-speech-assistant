@@ -1,4 +1,5 @@
 import json
+import traceback
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -10,8 +11,8 @@ from typing import Annotated
 from fastapi import Depends
 from datetime import datetime, timezone
 
+from services.ai_context_utils import build_messages
 from services.lang_detector import LanguageDetector
-from services.ai_context_utils import ask_message
 from dto.task_dto import TaskUpdate
 from databases.postgres_db import PostgresDatabase
 from config import (POSTGRES_DB, POSTGRES_HOST, POSTGRES_PASSWORD, POSTGRES_PORT, POSTGRES_USER, 
@@ -28,6 +29,7 @@ from workers.ai_tts import worker_ai_tts
 from workers.ai_answer import worker_ai_answer
 from workers.worker_supervisor import terminate_session_if_workers_done
 from models.task import Task, TaskStatusEnum
+from services.ai_tools import AiToolsManager
 
 app = FastAPI()
 
@@ -42,13 +44,14 @@ postgres_db = PostgresDatabase(
 postgres_dep = Annotated[Session, Depends(postgres_db.get_session)]
 transcriptor = Transcriptor(TRANSCRIPTION_MODEL)
 language_detector = LanguageDetector("data/lid.176.bin")
+ai_tool_manager = AiToolsManager(postgres_db)
 
 
 @app.post('/ask')
 def ask(question: Question, esp32_info: str = ""):
     # # send prompt to the model
     return StreamingResponse(
-        ask_ai(client_ia, OLLAMA_CHAT_MODEL, ask_message(question), esp32_info),
+        ask_ai(client_ia, OLLAMA_CHAT_MODEL, build_messages(esp32_info, question), ai_tool_manager),
         media_type="text/plain"
     )
 
@@ -148,7 +151,7 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
                     # thread for audio transcription
                     asyncio.create_task(worker_transcribe(just_id, redis_db, transcriptor)),
                     # thread for asking ai
-                    asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia)),
+                    asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia, db, ai_tool_manager)),
                     # thread for sending ai tts audio
                     asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_db, buffer_queue, language_detector)),
                     # thread for sending ai answer
@@ -174,7 +177,7 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
                 # Push a value to indicate the end of the session
                 worker_tasks = [
                     # thread for asking ai
-                    asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia)),
+                    asyncio.create_task(worker_ai_ask(just_id, client_ws, redis_db, client_ia, db, ai_tool_manager)),
                     # thread for sending ai tts audio
                     asyncio.create_task(worker_ai_tts(just_id, client_ws, redis_db, buffer_queue, language_detector)),
                     # thread for sending ai answer
@@ -203,6 +206,8 @@ async def websocket(client_ws: WebSocket, db: postgres_dep):
 
     except Exception as e:
         print(f"[WS] Unexpected error for {just_id}: {e}")
+        traceback.print_exc()
+        raise
         
     finally:
         if supervisor_task is not None and not supervisor_task.done():

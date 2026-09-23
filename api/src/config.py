@@ -20,7 +20,7 @@ API_WEBSOCKET_PATH = getenv_checked("API_WEBSOCKET_PATH")
 OLLAMA_URL = getenv_checked("OLLAMA_URL")
 OLLAMA_CHAT_MODEL = getenv_checked("OLLAMA_CHAT_MODEL")
 
-TRANSCRIPTION_CHUNK_SIZE = 600000
+TRANSCRIPTION_CHUNK_SIZE = getenv_checked_int("TRANSCRIPTION_CHUNK_SIZE")
 TRANSCRIPTION_WINDOW_SIZE = getenv_checked_int("TRANSCRIPTION_WINDOW_SIZE")
 
 TRANSCRIPTION_MODEL = getenv_checked("TRANSCRIPTION_MODEL")
@@ -62,6 +62,3 @@ SIGNAL_AI_TTS_END = getenv_checked("SIGNAL_AI_TTS_END")
 SIGNAL_AI_WAKE_UP = getenv_checked("SIGNAL_AI_WAKE_UP")
 SIGNAL_ARGUMENT = getenv_checked("SIGNAL_ARGUMENT")
 SIGNAL_BUFFER_FREE = "/BUFFER FREE"
-
-MONTH = ["January", "February", "March", "April", "May", "June", "July",
-        "August", "September", "October", "November", "December"]

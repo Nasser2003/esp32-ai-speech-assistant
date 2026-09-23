@@ -1,5 +1,9 @@
+import traceback
+
 import ollama
-from services.ai_context_utils import ask_message, format_device_info, wakeup_message
+from services.ai_tools import AiToolsManager
+from models.task import Task
+from services.ai_context_utils import build_messages, format_device_info, build_wakeup_messages
 from databases.redis_db import RedisDatabase
 from config import (REDIS_KEY_PREFIX_TRANSCRIPTION, SIGNAL_AI_WAKE_UP, SIGNAL_ARGUMENT, SIGNAL_TRANSCRIPTION_START, 
     SIGNAL_TRANSCRIPTION_END, REDIS_KEY_PREFIX_AI_TTS, 
@@ -11,12 +15,12 @@ from fastapi import WebSocket
 import services.ollama_service as ollama_service
 import json
 from datetime import datetime
-
+from sqlalchemy.orm import Session
 
 
 # purpose: process transcription depending on window size
 async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatabase, 
-                     client_ia: ollama.AsyncClient):
+                     client_ia: ollama.AsyncClient, postgres_db: Session, ai_tool_manager: AiToolsManager):
     try:
         trans_key = REDIS_KEY_PREFIX_TRANSCRIPTION + just_id
         ai_tts_key = REDIS_KEY_PREFIX_AI_TTS + just_id
@@ -64,18 +68,21 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
             arguments = json.loads(argument_data)
         
         IS_AI_WAKE_UP_CONTEXT = arguments.get("type") == SIGNAL_AI_WAKE_UP
+        esp32_info = format_device_info(arguments)
+        ai_tool_manager.set_esp32_info(arguments)
         
         if IS_AI_WAKE_UP_CONTEXT:
-            full_question = wakeup_message(question)
+            reason = postgres_db.query(Task.argument) \
+                .filter(Task.id == arguments.get("task_id")) \
+                .scalar()
+            full_question = build_wakeup_messages(esp32_info, reason)
         else:
-            full_question = ask_message(question)
-        
-        esp32_info = format_device_info(arguments)
+            full_question = build_messages(esp32_info, question)
             
         await redis_db.r_push_expire(ai_text_key, SIGNAL_AI_TEXT_START)
         await redis_db.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_START)
         
-        async for sentense in ask_ai(client_ia, OLLAMA_CHAT_MODEL, full_question, esp32_info):
+        async for sentense in ask_ai(client_ia, OLLAMA_CHAT_MODEL, full_question, ai_tool_manager):
             if sentense and sentense.strip():
                 print(f"[WORKER AI ASK] AI answer: {sentense}")
                 await redis_db.r_push_expire(ai_text_key, sentense)
@@ -87,7 +94,9 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
         print(f"[WORKER AI ASK] WebSocket closed: {e}")
     
     except Exception as e:
-        print(f"[WORKER AI ASK] Exception occurred: {e}")
+        print("[WORKER AI ASK] Exception occurred:", flush=True)
+        traceback.print_exc()
+        raise
 
     finally:
         print("[WORKER AI ASK] Worker finished")

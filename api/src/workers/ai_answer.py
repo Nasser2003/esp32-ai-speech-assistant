@@ -1,3 +1,5 @@
+import traceback
+
 from fastapi import WebSocket
 
 from databases.redis_db import RedisDatabase
@@ -34,6 +36,8 @@ async def worker_ai_answer(just_id: str, client_ws: WebSocket, redis_db : RedisD
     
     except Exception as e:
         print(f"[WORKER AI ANSWER] Exception occurred: {e}")
+        traceback.print_exc()
+        raise
 
     finally:
         print("[WORKER AI ANSWER] Worker finished")

@@ -1,7 +1,11 @@
 import asyncio
 from fastapi import WebSocket
 
-async def terminate_session_if_workers_done(worker_tasks, client_ws: WebSocket, just_id: str):
+async def terminate_session_if_workers_done(
+    worker_tasks: list[asyncio.Task],
+    client_ws: WebSocket,
+    just_id: str,
+) -> None:
     results = await asyncio.gather(*worker_tasks, return_exceptions=True)
     for index, result in enumerate(results, start=1):
         if isinstance(result, Exception):

@@ -1,3 +1,5 @@
+import traceback
+
 from fastapi import WebSocket
 from piper import PiperVoice
 from simple_websocket.errors import ConnectionClosed
@@ -42,11 +44,16 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_db: RedisDatabase,
                 break
             else:
                 # Determine the segment language for TTS synthesis
+                conversation_language = await redis_db.getKey(ai_tts_key + "_lang")
+                if conversation_language is None:
+                    conversation_language = "en"
+                if isinstance(conversation_language, bytes):
+                    conversation_language = conversation_language.decode('utf-8')
                 try:
-                    lang = language_detector.detect(ai_answer_str)
+                    lang = language_detector.detect(ai_answer_str, 0.7, conversation_language)
                 except Exception as e:
                     print(f"[WORKER AI TTS] Error detecting language: {e}")
-                    lang = await redis_db.getKey(ai_tts_key + "_lang")
+                    lang = conversation_language
                 if lang is None:
                     lang = "en"
                 config = LANGUAGE_MAP.get(str(lang)) if str(lang) in LANGUAGE_MAP else LANGUAGE_MAP.get("en")
@@ -77,6 +84,8 @@ async def worker_ai_tts(just_id, client_ws: WebSocket, redis_db: RedisDatabase,
         
     except Exception as e:
         print(f"[WORKER AI TTS] Exception occurred: {e}")
+        traceback.print_exc()
+        raise
 
     finally:
         print("[WORKER AI TTS] Worker finished")
