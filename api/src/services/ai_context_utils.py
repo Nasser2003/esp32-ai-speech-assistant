@@ -1,5 +1,7 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+from sqlalchemy.orm import Session
+from models.ai_context import SystemContext, Message, ContextTypeEnum, RoleEnum
 
 MONTH = [
     "January", "February", "March", "April", "May", "June", "July",
@@ -129,6 +131,83 @@ TOOLS_JSON = [
     }
 ]
 
+def get_or_create_system_context(
+    db: Session,
+    device: str | None = None,
+    context_type: ContextTypeEnum = ContextTypeEnum.SYSTEM,
+) -> SystemContext:
+    query = db.query(SystemContext).filter(SystemContext.type == context_type)
+    if device is not None:
+        device_ctx = query.filter(SystemContext.device == device).first()
+        if device_ctx:
+            return device_ctx
+
+    default_ctx = query.filter(SystemContext.device.is_(None)).first()
+    if default_ctx:
+        return default_ctx
+
+    # Fallback: create base system context if none exists in DB
+    new_ctx = SystemContext(
+        type=context_type,
+        content=SYSTEM_PROMPT,
+        device=None,
+    )
+    db.add(new_ctx)
+    db.commit()
+    db.refresh(new_ctx)
+    return new_ctx
+
+
+def get_recent_messages(
+    db: Session,
+    system_id: int,
+    limit: int = 10,
+    device: str | None = None,
+) -> list[Message]:
+    query = db.query(Message).filter(Message.system == system_id)
+    if device is not None:
+        query = query.filter((Message.device == device) | (Message.device.is_(None)))
+    messages = (
+        query.order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(limit)
+        .all()
+    )
+    messages.reverse()
+    return messages
+
+
+def save_message(
+    db: Session,
+    system_id: int,
+    role: RoleEnum,
+    content: str,
+    device: str | None = None,
+) -> Message | None:
+    if not content or not content.strip():
+        return None
+    msg = Message(
+        system=system_id,
+        role=role,
+        content=content.strip(),
+        device=device,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+def get_system_summary(db: Session, device: str | None = None) -> str | None:
+    query = db.query(SystemContext).filter(SystemContext.type == ContextTypeEnum.SUMMARY)
+    if device is not None:
+        dev_summary = query.filter(SystemContext.device == device).first()
+        if dev_summary and dev_summary.content:
+            return dev_summary.content
+    summary = query.filter(SystemContext.device.is_(None)).first()
+    return summary.content if summary and summary.content else None
+
+
 def build_messages(esp32_info, message):
     return [
         {
@@ -162,6 +241,121 @@ def build_wakeup_messages(esp32_info, reason):
             ),
         },
     ]
+
+
+def build_messages_with_context(
+    db: Session,
+    esp32_info: str,
+    message: str,
+    limit: int = 10,
+    device: str | None = None,
+) -> tuple[list[dict], int]:
+    sys_ctx = get_or_create_system_context(db, device=device)
+    base_prompt = sys_ctx.content
+
+    if "{esp32_info}" in base_prompt:
+        system_content = base_prompt.format(esp32_info=esp32_info)
+    else:
+        system_content = f"{base_prompt}\n\nDevice reference:\n{esp32_info}"
+
+    messages: list[dict] = [
+        {
+            "role": "system",
+            "content": system_content,
+        }
+    ]
+
+    summary = get_system_summary(db, device=device)
+    if summary:
+        messages.append(
+            {
+                "role": "system",
+                "content": f"Summary of previous conversation:\n{summary}",
+            }
+        )
+
+    recent_messages = get_recent_messages(db, system_id=sys_ctx.id, limit=limit, device=device)
+    for hist_msg in recent_messages:
+        messages.append(
+            {
+                "role": hist_msg.role.value if hasattr(hist_msg.role, "value") else str(hist_msg.role),
+                "content": hist_msg.content,
+            }
+        )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": message,
+        }
+    )
+
+    return messages, sys_ctx.id
+
+
+def build_wakeup_messages_with_context(
+    db: Session,
+    esp32_info: str,
+    reason: str,
+    limit: int = 10,
+    device: str | None = None,
+) -> tuple[list[dict], int]:
+    sys_ctx = get_or_create_system_context(db, device=device)
+    base_prompt = sys_ctx.content
+
+    if "{esp32_info}" in base_prompt:
+        system_content = base_prompt.format(esp32_info=esp32_info)
+    else:
+        system_content = f"{base_prompt}\n\nDevice reference:\n{esp32_info}"
+
+    sub_ctx = db.query(SystemContext).filter(SystemContext.type == ContextTypeEnum.SUB_SYSTEM).first()
+    if sub_ctx and "{reason}" in sub_ctx.content:
+        addendum = sub_ctx.content.format(reason=reason)
+    elif sub_ctx:
+        addendum = f"\n\n{sub_ctx.content}\nReason to bring this up: {reason}"
+    else:
+        addendum = PROACTIVE_ADDENDUM.format(reason=reason)
+
+    system_content += addendum
+
+    messages: list[dict] = [
+        {
+            "role": "system",
+            "content": system_content,
+        }
+    ]
+
+    summary = get_system_summary(db, device=device)
+    if summary:
+        messages.append(
+            {
+                "role": "system",
+                "content": f"Summary of previous conversation:\n{summary}",
+            }
+        )
+
+    recent_messages = get_recent_messages(db, system_id=sys_ctx.id, limit=limit, device=device)
+    for hist_msg in recent_messages:
+        messages.append(
+            {
+                "role": hist_msg.role.value if hasattr(hist_msg.role, "value") else str(hist_msg.role),
+                "content": hist_msg.content,
+            }
+        )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                "Start the conversation now.\n"
+                f"Topic: {reason}\n"
+                "Say one natural sentence to the user about this topic."
+            ),
+        }
+    )
+
+    return messages, sys_ctx.id
+
     
 def format_device_info(arguments: dict) -> str:
     lines = []

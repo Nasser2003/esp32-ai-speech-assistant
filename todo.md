@@ -17,6 +17,8 @@
 - implement in the esp32, service api calls to know the current type and location of the device
 - replace `lang_detector` python library with `fasttext-numpy2` for more accuracy in text language prediction
 - implement tasks in ESP32 (alarm, change volume, message from ai) with its arguments
+- implement an architecture for context memory management in postgre
+
 
 ## DOING
 
@@ -32,7 +34,7 @@
 
 ### memory management
 
-- implement an architecture for context memory management in postgre
+- automatic rolling conversation summary when history exceeds threshold
 
 ### device shape
 

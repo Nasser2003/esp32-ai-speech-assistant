@@ -3,12 +3,16 @@ import traceback
 import ollama
 from services.ai_tools import AiToolsManager
 from models.task import Task
-from services.ai_context_utils import build_messages, format_device_info, build_wakeup_messages
+from models.ai_context import RoleEnum
+from services.ai_context_utils import (
+    build_messages, format_device_info, build_wakeup_messages,
+    build_messages_with_context, build_wakeup_messages_with_context, save_message
+)
 from databases.redis_db import RedisDatabase
 from config import (REDIS_KEY_PREFIX_TRANSCRIPTION, SIGNAL_AI_WAKE_UP, SIGNAL_ARGUMENT, SIGNAL_TRANSCRIPTION_START, 
     SIGNAL_TRANSCRIPTION_END, REDIS_KEY_PREFIX_AI_TTS, 
     REDIS_KEY_PREFIX_AI_TEXT, SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, 
-    SIGNAL_AI_TEXT_START, SIGNAL_AI_TEXT_END, OLLAMA_CHAT_MODEL)
+    SIGNAL_AI_TEXT_START, SIGNAL_AI_TEXT_END, OLLAMA_CHAT_MODEL, MAX_CONTEXT_MESSAGES)
 from services.ollama_service import ask_ai
 from simple_websocket.errors import ConnectionClosed
 from fastapi import WebSocket
@@ -71,25 +75,57 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
         esp32_info = format_device_info(arguments)
         ai_tool_manager.set_esp32_info(arguments)
         
+        device_mac = arguments.get("mac")
+        system_id = None
+        user_prompt_to_save = None
+
         if IS_AI_WAKE_UP_CONTEXT:
             reason = postgres_db.query(Task.argument) \
                 .filter(Task.id == arguments.get("task_id")) \
                 .scalar()
-            full_question = build_wakeup_messages(esp32_info, reason)
+            full_question, system_id = build_wakeup_messages_with_context(
+                postgres_db, esp32_info, reason, limit=MAX_CONTEXT_MESSAGES, device=device_mac
+            )
+            user_prompt_to_save = f"[Wake-up topic]: {reason}" if reason else "[Wake-up interaction]"
         else:
-            full_question = build_messages(esp32_info, question)
+            full_question, system_id = build_messages_with_context(
+                postgres_db, esp32_info, question, limit=MAX_CONTEXT_MESSAGES, device=device_mac
+            )
+            user_prompt_to_save = question
             
         await redis_db.r_push_expire(ai_text_key, SIGNAL_AI_TEXT_START)
         await redis_db.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_START)
         
+        full_ai_answer = ""
         async for sentense in ask_ai(client_ia, OLLAMA_CHAT_MODEL, full_question, ai_tool_manager):
             if sentense and sentense.strip():
                 print(f"[WORKER AI ASK] AI answer: {sentense}")
+                full_ai_answer += sentense
                 await redis_db.r_push_expire(ai_text_key, sentense)
                 await redis_db.r_push_expire(ai_tts_key, sentense)
             
         await redis_db.r_push_expire(ai_text_key, SIGNAL_AI_TEXT_END)
         await redis_db.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_END)
+
+        # Save conversation turn to PostgreSQL
+        if system_id is not None:
+            if user_prompt_to_save and user_prompt_to_save.strip():
+                save_message(
+                    postgres_db,
+                    system_id=system_id,
+                    role=RoleEnum.USER,
+                    content=user_prompt_to_save,
+                    device=device_mac,
+                )
+            if full_ai_answer and full_ai_answer.strip():
+                save_message(
+                    postgres_db,
+                    system_id=system_id,
+                    role=RoleEnum.ASSISTANT,
+                    content=full_ai_answer,
+                    device=device_mac,
+                )
+
     except ConnectionClosed as e:
         print(f"[WORKER AI ASK] WebSocket closed: {e}")
     
