@@ -1,5 +1,6 @@
-from typing import Generator
+from typing import Annotated, Generator
 
+from fastapi import Depends
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
@@ -11,6 +12,9 @@ class PostgresDatabase:
         self.engine = create_engine(db_url)
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         self.Base = Base
+
+    def create_session(self) -> Session:
+        return self.SessionLocal()
 
     def get_session(self):
         db = self.SessionLocal()

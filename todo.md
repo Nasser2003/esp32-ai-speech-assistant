@@ -14,16 +14,19 @@
 - learn about postgre and how to integrate it with the api
 - create a postgre table for planned tasks (esp-id => mac)
 - when waken up from timer, fetch planned task from api, then run the current one and change status
+- implement in the esp32, service api calls to know the current type and location of the device
+- replace `lang_detector` python library with `fasttext-numpy2` for more accuracy in text language prediction
+- implement tasks in ESP32 (alarm, change volume, message from ai) with its arguments
 
 ## DOING
 
-- implement tasks in ESP32 (alarm, change volume, message from ai) with its arguments
+- inject in the model the tools it can have access to
 
 ## TODO
 
 ### task execution
 
-- inject in the model the features it can have access to
+- give ESP32 context (battery, time(from api), volume)
 - find a way to make the model execute some tasks (produce special commands and intercept by the API)
 - learn freeCAD to create a design for the device
 
