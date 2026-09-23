@@ -42,6 +42,7 @@ Timer initbatteryTimer(500);
 Timer connectingTimer(500);
 Timer connectingTimeout(2000);
 Timer connectedWifiTimer(500);
+Timer recordingDelay(90); // ~ size of the button press wav duration (ms)
 Timer minRecordingTimer(2000);
 Timer maxRecordingTimer(15000);
 Timer recordStopTimer(1000);
@@ -52,7 +53,7 @@ Timer sleepTimeout(2000);
 Timer fetchTimer(2000);
 Timer waitingAiTimeout(30000);
 Timer alarmTimeout(5000);
-Timer alarmOverDelay(1000);
+Timer alarmOverDelay(2000);
 Timer changeVolumeTimer(2000);
 
 Timer updateTimer(0);
@@ -66,6 +67,9 @@ static EspWakeUpCause WAKE_UP_CAUSE;
 // If API connection was successful, allow periodic timer wake up for api update
 RTC_DATA_ATTR bool isAPIConnectionSuccessful = false;
 static Task currentTask;
+static int lastButtonState = HIGH;
+static int currentButtonState = HIGH;
+String esp32InfoJson = "";
 
 // WiFi credentials manager (LRU-ordered, persisted in NVS)
 // Using a pointer to avoid any potential global constructor issues on ESP32-C3
@@ -76,6 +80,7 @@ static int _credIndex = 0; // current credential being tried in CONNECTING_WIFI
 void setWebSocketCallback();
 void setWifiCallback();
 bool isButtonPressed();
+bool isButtonReleased();
 void initComponents();
 String generateEsp32InfoJson(String type, int taskId);
 
@@ -83,7 +88,7 @@ void setup()
 {
     Serial.begin(115200);
 
-    delay(1000); // Useful to not skip the first Serial.print() after esp start
+    // delay(1000); // Useful to not skip the first Serial.print() after esp start
 
     // Heap-allocate the credentials manager to avoid any global-ctor issues
     credManager = new WifiCredentialsManager();
@@ -118,10 +123,12 @@ void loop()
                 preInitTimer.setDuration(0);
                 initTimer.setDuration(0);
                 initbatteryTimer.setDuration(0);
-                preInitTimer.start();
-                connectingTimer.reset();
-                connectedWifiTimer.reset();
+                connectingTimer.setDuration(0);
+                connectedWifiTimer.setDuration(0);
                 enterSleepModeTimer.reset();
+
+                screen.setAnimated(false);
+                preInitTimer.start();
             } 
             else if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) 
             {
@@ -152,8 +159,11 @@ void loop()
             updateTimer.start();
             initComponents();
             locationTimeApi.checkExpiration();
-
-            screen.displayMessage("Initializing...");
+            
+            if (WAKE_UP_CAUSE == EspWakeUpCause::RESET)
+            {
+                screen.displayMessage("Initializing...");
+            }
             
             initbatteryTimer.start();
             initTimer.start();
@@ -161,8 +171,11 @@ void loop()
         if (initbatteryTimer.isElapsed()) 
         {
             initbatteryTimer.breakIt();
-            std::string batteryPercentage = std::to_string(powerController.getBatteryPercentage());
-            screen.addMessage("\nBattery: " + batteryPercentage + "%");
+            if (WAKE_UP_CAUSE == EspWakeUpCause::RESET) 
+            {
+                std::string batteryPercentage = std::to_string(powerController.getBatteryPercentage());
+                screen.addMessage("\nBattery: " + batteryPercentage + "%");
+            }
         }
         if (initTimer.isElapsed()) 
         {
@@ -181,10 +194,18 @@ void loop()
             const auto& creds = credManager->getAll();
             // Try the first (most-recently-used) credential
             const WifiCredential& c = creds[_credIndex];
-            screen.displayMessage(
-                "Connecting to WiFi...\n" + c.ssid + " (" + std::to_string(_credIndex + 1) +
-                "/" + std::to_string(creds.size()) + ")"
-            );
+            if (WAKE_UP_CAUSE == EspWakeUpCause::RESET) {
+                screen.displayMessage(
+                    "Connecting to WiFi...\n" + c.ssid + " (" + std::to_string(_credIndex + 1) +
+                    "/" + std::to_string(creds.size()) + ")"
+                );
+            }
+            if (WAKE_UP_CAUSE == EspWakeUpCause::GPIO) {
+                screen.displayMessage(
+                    "Connecting to WiFi..."
+                );
+            }
+
             Serial.printf("[WiFi] Trying credential [%d]: %s\n", _credIndex, c.ssid.c_str());
             WiFi.begin(c.ssid.c_str(), c.password.c_str());
             connectingTimeout.start();
@@ -209,10 +230,12 @@ void loop()
             if (_credIndex < (int)creds.size()) {
                 // Try the next credential
                 const WifiCredential& c = creds[_credIndex];
-                screen.displayMessage(
-                    "Connecting to WiFi...\n" + c.ssid + " (" + std::to_string(_credIndex + 1) +
-                    "/" + std::to_string(creds.size()) + ")"
-                );
+                if (WAKE_UP_CAUSE == EspWakeUpCause::RESET) {
+                    screen.displayMessage(
+                        "Connecting to WiFi...\n" + c.ssid + " (" + std::to_string(_credIndex + 1) +
+                        "/" + std::to_string(creds.size()) + ")"
+                    );
+                }
                 Serial.printf("[WiFi] Trying credential [%d]: %s\n", _credIndex, c.ssid.c_str());
                 WiFi.begin(c.ssid.c_str(), c.password.c_str());
                 connectingTimeout.start();
@@ -226,7 +249,7 @@ void loop()
     case State::CONNECTION_FAILED:
         if (runOnceOnStateChange()) 
         {
-            screen.addMessage("\n x Failed to connect to WiFi. Starting BLE provisioning...", true);
+            screen.addMessage("\n x Failed to connect to WiFi.", true);
             errorTimer.start();
         }
         if (errorTimer.isElapsed()) 
@@ -238,6 +261,7 @@ void loop()
         if (runOnceOnStateChange()) 
         {
             screen.addMessage("\n v Connected to WiFi!", true);
+            locationTimeApi.begin();
             connectedWifiTimer.start();
         }
         if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) 
@@ -298,13 +322,21 @@ void loop()
                 currentTask = task;
             } else {
                 Serial.printf("[STATE] No task available: %d\n", statusCode);
-                changeState(State::IDLE);
+                if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
+                    changeState(State::SLEEP_MODE);
+                } else {
+                    changeState(State::IDLE);
+                }
                 break;
             }
 
             // Initialize components to prepare for the task
             if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
                 initComponents();
+            }
+
+            if (WAKE_UP_CAUSE == EspWakeUpCause::GPIO) {
+                screen.setAnimated(true);
             }
 
             switch (task.type)
@@ -320,16 +352,18 @@ void loop()
                 changeState(State::CHANGE_VOLUME);
                 break;
             case TaskType::WAKE_UP_AI:
+                if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
+                    WAKE_UP_CAUSE = EspWakeUpCause::GPIO;
+                }
                 changeState(State::AI_RINGSTONE);
                 break;
             default:
+                if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
+                    changeState(State::SLEEP_MODE);
+                } else {
+                    changeState(State::IDLE);
+                }
                 break;
-            }
-
-            if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) {
-                changeState(State::SLEEP_MODE);
-            } else {
-                changeState(State::IDLE);
             }
         }
 
@@ -354,6 +388,10 @@ void loop()
             audioPlayer.stop();   // clear ttsBusy/wavPlaying so play() works next time
             WiFi.setSleep(true);
             enterSleepModeTimer.start();
+
+            if (WAKE_UP_CAUSE == EspWakeUpCause::GPIO) {
+                screen.setAnimated(true);
+            }
         }
         if (isButtonPressed()) // button pressed
         {
@@ -367,7 +405,7 @@ void loop()
     case State::RECORDING:
     {
         if (runOnceOnStateChange()) 
-        {
+        { 
             WiFi.setSleep(false);
             if (!WiFi.isConnected()) {
                 changeState(State::CONNECTING_WIFI);
@@ -377,19 +415,26 @@ void loop()
                 changeState(State::CONNECTING_API);
                 break;
             }
-            screen.displayMessage("[SYS] Recording...");
-            // Play the press sound synchronously before activating the mic.
-            // The ESP32-C3 has a single I2S port shared between mic (RX) and
-            // speaker (TX) — playing and recording cannot overlap.
+            
+            // audioPlayer.stop();   // clear ttsBusy/wavPlaying
             audioPlayer.play("/button-press.wav");
-            while (audioPlayer.isPlaying()) { vTaskDelay(1); }
-            recorder.startRecording();
+            screen.displayMessage("[SYS] Recording...");
             blueLedPulse.startPulse();
+            recordingDelay.start();
             minRecordingTimer.start();
             maxRecordingTimer.start();
+        }
+
+        if (recordingDelay.isElapsed()
+            && !audioPlayer.isPlaying()
+            && audioPlayer.isStreamDrained()) {
+            recorder.startRecording();
+            recordingDelay.breakIt(); // Prevent re-entering this block
 
             webSocket.sendMessage(ENV::RECORDING_START);
-        } else {
+        }
+
+        if (recordingDelay.isBroken()) {
             // Send one recorded segment if available
             size_t chunkSize;
             const uint8_t* segment = recorder.fetchRecordedChunk(chunkSize);
@@ -399,7 +444,7 @@ void loop()
             }
         }
 
-        if (!isButtonPressed() && minRecordingTimer.isElapsed())
+        if (isButtonReleased() && minRecordingTimer.isElapsed())
         {
             changeState(State::RECORDED);
         } else if (maxRecordingTimer.isElapsed())
@@ -422,6 +467,7 @@ void loop()
                 std::string bufferSignal = std::string(ENV::BUFFER_FREE) + ":" + std::to_string(freeBytes);
                 webSocket.sendMessage(bufferSignal.c_str());
             }
+            // audioPlayer.stop();   // clear ttsBusy/wavPlaying0
             audioPlayer.play("/button-release.wav");
             blueLedPulse.stopPulse();
             recordStopTimer.start();
@@ -452,9 +498,7 @@ void loop()
     case State::WAITING_AI_RESPONSE:
         if (runOnceOnStateChange())
         {
-            if (getLastState() != State::AI_RINGSTONE) {
-                screen.addMessage("\n> ");
-            }
+            screen.addMessage("\n> ");
             // ai-begin.wav only if the speaker is free (button-release may still be playing)
             if (!audioPlayer.isPlaying()) {
                 audioPlayer.play("/ai-begin.wav");
@@ -588,17 +632,19 @@ void loop()
             alarmTimeout.start();
         }
         if (alarmOverDelay.isElapsed()) {
+            alarmOverDelay.reset();
             httpController.updateTask();
-            changeState(State::IDLE);
+            changeState(State::FETCH_API_UPDATES);
         } else if (isButtonPressed() && alarmOverDelay.isNotStarted()) {
             audioPlayer.stop();
-            screen.addMessage("[SYS] Alarm stopped. Returning to IDLE.");
+            screen.addMessage("[SYS] Alarm stopped.");
             alarmOverDelay.start();
-        } else if (alarmTimeout.isElapsed()) {
+        } else if (alarmTimeout.isElapsed() && alarmOverDelay.isNotStarted()) {
             screen.addMessage("[SYS] Alarm timeout.");
             audioPlayer.stop();
             changeState(State::SLEEP_MODE);
         } else if (!audioPlayer.isAudioPlaying() && alarmOverDelay.isNotStarted()) {
+            audioPlayer.stop();
             audioPlayer.play("/alarm.wav");
         }
         break;
@@ -612,7 +658,7 @@ void loop()
             changeVolumeTimer.start();
         }
         if (changeVolumeTimer.isElapsed()) {
-            changeState(State::IDLE);
+            changeState(State::FETCH_API_UPDATES);
         }
         break;
     case State::AI_RINGSTONE:
@@ -623,6 +669,7 @@ void loop()
             alarmTimeout.start();
         }
         if (alarmOverDelay.isElapsed()) {
+            alarmOverDelay.reset();
             if (!webSocket.connect()) {
                 changeState(State::CONNECTING_API);
                 break;
@@ -641,13 +688,14 @@ void loop()
             changeState(State::WAITING_AI_RESPONSE);
         } else if (isButtonPressed() && alarmOverDelay.isNotStarted()) {
             audioPlayer.stop();
-            screen.displayMessage("[SYS] Calling... Waiting for AI.\n");
+            screen.displayMessage("[SYS] Calling...\nWaiting for AI...");
             alarmOverDelay.start();
-        } else if (alarmTimeout.isElapsed()) {
+        } else if (alarmTimeout.isElapsed() && alarmOverDelay.isNotStarted()) {
             screen.addMessage("[SYS] Ringstone timeout.");
             audioPlayer.stop();
             changeState(State::SLEEP_MODE);
         } else if (!audioPlayer.isAudioPlaying() && alarmOverDelay.isNotStarted()) {
+            audioPlayer.stop();
             audioPlayer.play("/ringstone-1.wav");
         }
         break;
@@ -664,6 +712,8 @@ void loop()
         screen.update();
         webSocket.update();
         powerController.update();
+        lastButtonState = currentButtonState;
+        currentButtonState = digitalRead(ENV::BUTTON_PIN);
 
         // selecting some states to avoid breaking any logic or some processes in progress
         bool PRESSED_DURING_WAKEUP_BY_TIMER_SLEEP = 
@@ -684,7 +734,14 @@ void loop()
 }
 
 bool isButtonPressed() {
-    return digitalRead(ENV::BUTTON_PIN) == LOW;
+    bool pressed = (lastButtonState == HIGH && currentButtonState == LOW);
+    return pressed;
+}
+
+bool isButtonReleased() {
+    // reason for doing differently than isButtonPressed() is to avoid the case during Reconding when the button is released and the minimum of 5 seconds is not reached => released button not detected => not consistent state
+    bool released = currentButtonState == HIGH;
+    return released;
 }
 
 void setWebSocketCallback() {
@@ -711,7 +768,7 @@ void setWebSocketCallback() {
         if (api_message.empty()) {
             return;
         } else if (api_message == ENV::TRANSCRIPTION_START) {
-            screen.addMessage("\n[SYS] Transcribing...\n");
+            screen.addMessage("\n[SYS] Transcribing...\n", true);
         } else if (api_message == ENV::TRANSCRIPTION_END) {
             // nothing to do
         } else if (api_message == ENV::AI_TEXT_START || api_message == ENV::AI_TTS_START) {
@@ -792,13 +849,14 @@ void initComponents() {
     audioPlayer.startStream();
 }
 
-String generateEsp32InfoJson(String type,int taskId)
+String generateEsp32InfoJson(String type, int taskId)
 {
     JsonDocument document;
 
     document["type"] = type;
     document["volume"] = audioPlayer.getVolume();
     document["battery"] = powerController.getBatteryPercentage();
+    document["mac"] = WiFi.macAddress();
 
     if (locationTimeApi.begin()) {
         const LocationTime& info = locationTimeApi.get();

@@ -17,7 +17,7 @@ struct LocationTime
 class LocationTimeApi
 {
 public:
-    explicit LocationTimeApi(uint32_t expirationMs = 10 * 60 * 1000);
+    explicit LocationTimeApi(uint32_t expirationMs = 60 * 60 * 1000); // Default expiration: 1 hour
 
     void setExpiration(uint32_t expirationMs);
 

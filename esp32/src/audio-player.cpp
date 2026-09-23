@@ -145,19 +145,62 @@ void AudioPlayer::filePlaybackTask()
         return;
     }
 
-    file.seek(44); // skip WAV header
+    // Vérification de l'en-tête RIFF/WAVE
+    uint8_t header[12];
+    if (file.read(header, 12) != 12 ||
+        memcmp(header, "RIFF", 4) != 0 ||
+        memcmp(header + 8, "WAVE", 4) != 0) {
+        Serial.printf("[AudioPlayer] Invalid WAV header: %s\n", filePath);
+        file.close();
+        wavPlaying = false;
+        return;
+    }
+
+    // Parcours des chunks RIFF pour trouver le chunk "data"
+    uint32_t dataBytesRemaining = 0;
+    bool foundData = false;
+
+    while (file.available() >= 8) {
+        char chunkId[4];
+        uint32_t chunkSize = 0;
+        if (file.read(reinterpret_cast<uint8_t*>(chunkId), 4) != 4) break;
+        if (file.read(reinterpret_cast<uint8_t*>(&chunkSize), 4) != 4) break;
+
+        if (memcmp(chunkId, "data", 4) == 0) {
+            dataBytesRemaining = chunkSize;
+            foundData = true;
+            break;
+        } else {
+            // Ignorer les chunks de métadonnées (LIST, INFO, etc.)
+            file.seek(file.position() + chunkSize);
+        }
+    }
+
+    if (!foundData || dataBytesRemaining == 0) {
+        Serial.printf("[AudioPlayer] No data chunk in %s\n", filePath);
+        file.close();
+        wavPlaying = false;
+        return;
+    }
 
     AudioChunk chunk;
 
-    while (file.available() && !stopRequested) {
+    while (dataBytesRemaining > 0 && !stopRequested) {
+        size_t toRead = PCM_CHUNK_SIZE;
+        if (toRead > dataBytesRemaining) {
+            toRead = dataBytesRemaining;
+        }
+
         chunk.length = file.read(
             reinterpret_cast<uint8_t*>(chunk.data),
-            PCM_CHUNK_SIZE
+            toRead
         );
 
         if (chunk.length == 0) {
             break;
         }
+
+        dataBytesRemaining -= chunk.length;
 
         // Attente bornée + re-check stopRequested : évite de bloquer
         // indéfiniment si stop() reset la queue pendant l'attente.
@@ -173,7 +216,7 @@ void AudioPlayer::filePlaybackTask()
     }
 
     file.close();
-
+    
     // Sentinelle : signale la fin du fichier à pcmTask()
     chunk.length = 0;
     xQueueSend(pcmQueue, &chunk, pdMS_TO_TICKS(500));

@@ -6,6 +6,7 @@ public:
     void displayMessage(std::string message);
     void addMessage(std::string message, bool forceUpdate = false);
     void update();
+    void setAnimated(bool animated);
     void clear();
 private:
     int SDA_PIN;

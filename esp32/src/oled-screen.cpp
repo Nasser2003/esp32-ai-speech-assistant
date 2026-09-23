@@ -80,6 +80,10 @@ void OledScreen128x32::addMessage(std::string message, bool forceUpdate) {
 	// this->textShowStartTime = millis() + (textShowEndTime - textShowStartTime);
 }
 
+void OledScreen128x32::setAnimated(bool animated) {
+	this->animated = animated;
+}
+
 void OledScreen128x32::update() {
 	// if (!initialized) {
 	// 	Serial.println("[OLED] Warning: update() called before init()");

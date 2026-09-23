@@ -70,6 +70,7 @@ private:
     static void filePlaybackTaskEntry(void* parameter);
     void filePlaybackTask();
 
+    bool i2sReady = false;  // true after init() succeeds; guards i2s_zero_dma_buffer in stop()
     float volumeGain = 0.3f;
     void applyVolume(int16_t* samples, size_t sampleCount);
 };
