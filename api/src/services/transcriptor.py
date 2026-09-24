@@ -1,27 +1,33 @@
 from faster_whisper import WhisperModel
 import numpy as np
+import traceback
 
 class Transcriptor:
     def __init__(self, MODEL):
         self.model = WhisperModel(MODEL, device="cpu", compute_type="int8", )
     
     def transcribe(self, audio: bytes, language: str):
-        audio_np = self._convert_binary_to_np(audio)
-        
-        segments, info = self.model.transcribe(audio_np, language=language)
-        for segment in segments:
-            text = segment.text.strip()
-            # filter some segments
-            if not text:
-                continue
-            duration = segment.end - segment.start
+        try:
+            audio_np = self._convert_binary_to_np(audio)
+            
+            segments, info = self.model.transcribe(audio_np, language=language)
+            for segment in segments:
+                text = segment.text.strip()
+                # filter some segments
+                if not text:
+                    continue
+                duration = segment.end - segment.start
 
-            if duration < 0.3:
-                continue
+                if duration < 0.3:
+                    continue
 
-            if segment.no_speech_prob > 0.6:
-                continue
-            yield text, info.language
+                if segment.no_speech_prob > 0.6:
+                    continue
+                yield text, info.language
+        except Exception as e:
+            print(f"[WORKER-TRANS] Exception occurred: {e}")
+            traceback.print_exc()
+            raise
              
     @staticmethod
     def _convert_binary_to_np(data) -> np.ndarray:

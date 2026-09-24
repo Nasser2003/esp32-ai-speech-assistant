@@ -10,21 +10,22 @@ from services.ai_context_utils import (
 )
 from databases.redis_db import RedisDatabase
 from config import (REDIS_KEY_PREFIX_TRANSCRIPTION, SIGNAL_AI_WAKE_UP, SIGNAL_ARGUMENT, SIGNAL_TRANSCRIPTION_START, 
-    SIGNAL_TRANSCRIPTION_END, REDIS_KEY_PREFIX_AI_TTS, 
+    SIGNAL_TRANSCRIPTION_END, REDIS_KEY_PREFIX_AI_TTS, GROQ_CHAT_MODEL,
     REDIS_KEY_PREFIX_AI_TEXT, SIGNAL_AI_TTS_START, SIGNAL_AI_TTS_END, 
     SIGNAL_AI_TEXT_START, SIGNAL_AI_TEXT_END, OLLAMA_CHAT_MODEL, MAX_CONTEXT_MESSAGES)
-from services.ollama_service import ask_ai
+# from services.ollama_service import ask_ai
+from services.groq_service import ask_ai
 from simple_websocket.errors import ConnectionClosed
 from fastapi import WebSocket
 import services.ollama_service as ollama_service
 import json
 from datetime import datetime
 from sqlalchemy.orm import Session
-
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # purpose: process transcription depending on window size
 async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatabase, 
-                     client_ia: ollama.AsyncClient, postgres_db: Session, ai_tool_manager: AiToolsManager):
+                     client_ia: any, postgres_db: Session, ai_tool_manager: AiToolsManager):
     try:
         trans_key = REDIS_KEY_PREFIX_TRANSCRIPTION + just_id
         ai_tts_key = REDIS_KEY_PREFIX_AI_TTS + just_id
@@ -71,6 +72,17 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
             argument_data = argument_data.decode('utf-8')
             arguments = json.loads(argument_data)
         
+        # Calculating user time based on timezone sent by ESP32
+        now = datetime.now(ZoneInfo("UTC"))
+        if arguments.get("timezone"):
+            tz_str = arguments.get("timezone")
+            try:
+                current_timezone = ZoneInfo(tz_str)
+                now = datetime.now(current_timezone)
+                arguments["date_time"] = now.strftime("%Y-%m-%d %H:%M:%S")
+            except ZoneInfoNotFoundError:
+                print(f"[WARN] Unknown timezone received from ESP32 : {tz_str!r}")
+
         IS_AI_WAKE_UP_CONTEXT = arguments.get("type") == SIGNAL_AI_WAKE_UP
         esp32_info = format_device_info(arguments)
         ai_tool_manager.set_esp32_info(arguments)
@@ -97,7 +109,7 @@ async def worker_ai_ask(just_id: str, client_ws: WebSocket, redis_db: RedisDatab
         await redis_db.r_push_expire(ai_tts_key, SIGNAL_AI_TTS_START)
         
         full_ai_answer = ""
-        async for sentense in ask_ai(client_ia, OLLAMA_CHAT_MODEL, full_question, ai_tool_manager):
+        async for sentense in ask_ai(client_ia, GROQ_CHAT_MODEL, full_question, ai_tool_manager):
             if sentense and sentense.strip():
                 print(f"[WORKER AI ASK] AI answer: {sentense}")
                 full_ai_answer += sentense

@@ -16,7 +16,7 @@ class LanguageDetector:
         self.model = fasttext.load_model(model_path.as_posix())
         
 
-    def detect(self, text: str, lang_threshold: float = 0.7, probable_lang: str = "en") -> str:
+    def detect(self, text: str, lang_threshold: float = 0.55, probable_lang: str = "en") -> str:
         clean_text = " ".join(text.split())
         predictions = self.model.predict(clean_text, k=5)  # Get the first top prediction (k=1)
         

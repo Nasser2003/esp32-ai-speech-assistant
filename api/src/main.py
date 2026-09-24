@@ -17,12 +17,14 @@ from dto.task_dto import TaskUpdate
 from databases.postgres_db import PostgresDatabase
 from config import (POSTGRES_DB, POSTGRES_HOST, POSTGRES_PASSWORD, POSTGRES_PORT, POSTGRES_USER, 
     REDIS_KEY_PREFIX_TRANSCRIPTION, REDIS_TTL_EXPIRE_TIME, REDIS_HOST, REDIS_KEY_PREFIX_RECORD, 
-    SIGNAL_AI_WAKE_UP, SIGNAL_ARGUMENT, SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, 
-    TRANSCRIPTION_MODEL, REDIS_PORT, OLLAMA_URL, API_WEBSOCKET_PATH, SIGNAL_BUFFER_FREE)
+    SIGNAL_AI_WAKE_UP, SIGNAL_ARGUMENT, SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, OLLAMA_CHAT_MODEL, GROQ_TRANSCRIPTION_MODEL,
+    TRANSCRIPTION_MODEL, REDIS_PORT, OLLAMA_URL, API_WEBSOCKET_PATH, SIGNAL_BUFFER_FREE, GROQ_API_KEY, GROQ_CHAT_MODEL)
 from dto.question import Question
 from services.ollama_service import ask_ai
+from groq import AsyncGroq
 from databases.redis_db import RedisDatabase
-from services.transcriptor import Transcriptor
+# from services.transcriptor import Transcriptor
+from services.groq_transcriptor import Transcriptor
 from workers.transcribe import worker_transcribe
 from workers.ai_ask import worker_ai_ask
 from workers.ai_tts import worker_ai_tts
@@ -33,7 +35,8 @@ from services.ai_tools import AiToolsManager
 
 app = FastAPI()
 
-client_ia = ollama.AsyncClient(OLLAMA_URL)
+# client_ia = ollama.AsyncClient(OLLAMA_URL)
+client_ia = AsyncGroq(api_key=GROQ_API_KEY)
 redis_db = RedisDatabase(
     host=REDIS_HOST, port=REDIS_PORT, db=0, ttl=REDIS_TTL_EXPIRE_TIME
 )
@@ -42,7 +45,8 @@ postgres_db = PostgresDatabase(
     password=POSTGRES_PASSWORD, database=POSTGRES_DB
 )
 postgres_dep = Annotated[Session, Depends(postgres_db.get_session)]
-transcriptor = Transcriptor(TRANSCRIPTION_MODEL)
+# transcriptor = Transcriptor(TRANSCRIPTION_MODEL)
+transcriptor = Transcriptor(GROQ_TRANSCRIPTION_MODEL, GROQ_API_KEY)
 language_detector = LanguageDetector("data/lid.176.bin")
 ai_tool_manager = AiToolsManager(postgres_db)
 
@@ -51,7 +55,7 @@ ai_tool_manager = AiToolsManager(postgres_db)
 def ask(question: Question, esp32_info: str = ""):
     # # send prompt to the model
     return StreamingResponse(
-        ask_ai(client_ia, OLLAMA_CHAT_MODEL, build_messages(esp32_info, question), ai_tool_manager),
+        ask_ai(client_ia, GROQ_CHAT_MODEL, build_messages(esp32_info, question), ai_tool_manager),
         media_type="text/plain"
     )
 

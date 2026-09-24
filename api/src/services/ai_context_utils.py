@@ -15,25 +15,14 @@ WEEKDAYS = [
 
 SYSTEM_PROMPT = """You are a voice assistant. The user speaks aloud into the microphone of a small ESP32 device. Their speech is transcribed into text for you (the transcription may contain errors). Your response is then read aloud through the device's speaker.
 
-The device is your means of communication, not the subject of the conversation. Only mention the device if the user asks a question about it. Since your Device is hold by the user, they may ask about time, location as "what time is it" or "where am I". You can answer these questions based on the device information provided in the context below.
-
-You have access to tools that can perform actions for the user. If the user asks you to perform an action that one of your tools can perform, you MUST call the corresponding tool.
-The user may ask you to perform actions in another language than English. Try to translate the user's language into tools.
-Examples:
-
-- If the user asks to set, create, define, or schedule an alarm, call createAlarm.
-- If the user asks to change the volume, call changeVolume.
-- If the user asks to continue or resume a conversation later, call continueConversationLater.
+The device is your means of communication, not the subject of the conversation. Only mention the device if the user asks a question about it. Since your Device is hold by the user, they may ask about time, location as "what time is it" or "where am I". You can answer these questions based on the device information provided in the context below, or use tools when user ask about an action.
 
 Rules, since your responses are spoken aloud:
-- Keep sentences short—generally one to three sentences. Get straight to the point.
 - No Markdown, no lists, no headings, no emojis, no code, no URLs.
 - If the transcript is unclear, ask the person to repeat themselves.
-- If a user asks you a question, answer with a sentence.
-- The language of the response should match the language of the user's context.
-
-Device reference (to be used only if the user asks about it, or if the topic about the device is relevant to the conversation):
-{esp32_info}"""
+- If a user asks you a question, answer with a sentence, or use the tools if necessary.
+- The language of the response should match the language of the user's actual speech context.
+- In order to create an alarm, change volume, or plan conversations, you have must Tools."""
 
 PROACTIVE_ADDENDUM = """
 
@@ -48,11 +37,9 @@ TOOLS_JSON = [
         "function": {
             "name": "createAlarm",
             "description": (
-                "Define an alarm for the user. "
-                "ALWAYS call this function when the user asks to set, create, "
-                "define, or schedule an alarm. "
-                "If the user says 'now' or 'maintenant', set time to 'now'. "
-                "Do not ask for the time when the user already said 'now'."
+                """Define an alarm for the user. If the user's specified time argument is relative (e.g. 'in 5 minutes', 
+                'in one hour') or absolute (e.g. 'at 10:00 AM', 'at 22:00'). In that case apply a mathematical operation
+                on the provided current time to match the expected time format."""
             ),
             "parameters": {
                 "type": "object",
@@ -60,8 +47,7 @@ TOOLS_JSON = [
                     "time": {
                         "type": "string",
                         "description": (
-                            "Alarm time. Use 'now' when the user asks "
-                            "for the alarm immediately."
+                            "Alarm time. Expected only the date format 'YYYY-MM-DD HH:MM' (e.g. 2026-01-01 00:00:00)."
                         )
                     }
                 },
@@ -245,15 +231,10 @@ def build_messages_with_context(
     sys_ctx = get_or_create_system_context(db, prompt_content=prompt_content)
     base_prompt = sys_ctx.content
 
-    if "{esp32_info}" in base_prompt:
-        system_content = base_prompt.format(esp32_info=esp32_info)
-    else:
-        system_content = f"{base_prompt}\n\nDevice reference:\n{esp32_info}"
-
     messages: list[dict] = [
         {
             "role": "system",
-            "content": system_content,
+            "content": base_prompt,
         }
     ]
 
@@ -278,7 +259,7 @@ def build_messages_with_context(
     messages.append(
         {
             "role": "user",
-            "content": message,
+            "content": f"{esp32_info}\n{message}",
         }
     )
 
