@@ -4,7 +4,6 @@
 
 struct LocationTime
 {
-    String dateTime;
     String location;
     String timezone;
 
@@ -17,7 +16,7 @@ struct LocationTime
 class LocationTimeApi
 {
 public:
-    explicit LocationTimeApi(uint32_t expirationMs = 60 * 60 * 1000); // Default expiration: 1 hour
+    explicit LocationTimeApi(uint32_t expirationMs = 24 * 60 * 60 * 1000UL); // Default expiration: 24 hours
 
     void setExpiration(uint32_t expirationMs);
 
@@ -36,15 +35,10 @@ public:
 private:
     uint32_t expirationMs;
     LocationTime locationTime;
-    uint32_t savedEpoch;
+    uint32_t lastFetchMs;
 
     bool saveToNvs();
     bool loadFromNvs();
-    bool refreshTimeFromRtc();
 
     bool fetchLocation();
-    bool syncTime();
-
-    String timezoneToPosix(const String& timezone);
-    void applyPosixTz(const String& timezone);
-};
+};

@@ -261,7 +261,6 @@ void loop()
         if (runOnceOnStateChange()) 
         {
             screen.addMessage("\n v Connected to WiFi!", true);
-            locationTimeApi.begin();
             connectedWifiTimer.start();
         }
         if (WAKE_UP_CAUSE == EspWakeUpCause::TIMER) 
@@ -861,7 +860,6 @@ String generateEsp32InfoJson(String type, int taskId)
     if (locationTimeApi.begin()) {
         const LocationTime& info = locationTimeApi.get();
 
-        document["date_time"] = info.dateTime;
         document["location"] = info.location;
         document["timezone"] = info.timezone;
     }
