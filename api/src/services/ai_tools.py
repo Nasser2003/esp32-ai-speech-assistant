@@ -16,6 +16,15 @@ class AiToolsManager:
     def set_esp32_info(self, esp32_info):
         self.esp32_args = esp32_info
 
+    @staticmethod
+    def _convert_to_server_time(time: str, user_timezone: str) -> datetime:
+        """converts an user provided time in string format %Y-%m-%d %H:%M
+        to a datetime object in UTC format."""
+        user_time = datetime.strptime(time, "%Y-%m-%d %H:%M").replace(
+            tzinfo=ZoneInfo(user_timezone)
+        )
+        return user_time.astimezone(timezone.utc)
+
     async def dispatch_tool(self, tool_name: str, *args, **kwargs):
         if tool_name not in self.tools:
             raise ValueError(f"Tool '{tool_name}' is not registered.")
@@ -42,36 +51,38 @@ class AiToolsManager:
             "task_id": task.id,
         }
 
-    async def create_wakeup(self, scheduled_at: str, reason: str):
+    async def create_wakeup(self, time: str, reason: str):
         print(
             f"[TOOL] Creating wake-up: "
-            f"{scheduled_at} - {reason}"
+            f"{time} - {reason}"
         )
+        db = self.db.create_session()
+        
+        user_timezone = self.esp32_args.get("timezone", "Europe/Brussels")
+        server_time = self._convert_to_server_time(time, user_timezone)
 
-        # PostgreSQL logic here
-        # ...
+        task = Task(
+            device=self.esp32_args["mac"],
+            run_at=server_time.strftime("%Y-%m-%d %H:%M:%S"),
+            type=TaskTypeEnum.WAKE_UP_AI,
+            status=TaskStatusEnum.PENDING,
+            argument="",
+        )
+        db.add(task)
+        db.commit()
+        db.refresh(task)
 
         return {
             "success": True,
-            "scheduled_at": scheduled_at,
+            "time": time,
         }
         
     async def create_alarm(self, time: str):
         print(f"[TOOL] Creating alarm: "f"{time}")
         db = self.db.create_session()
-        
-        if time == "now":
-            time = datetime.now().strftime("%Y-%m-%d %H:%M")
-        
-        user_timezone = self.esp32_args["timezone"] if "timezone" in self.esp32_args else "Europe/Brussels"
-        
-        # converting user time to UTC for storage in the database
-        user_time = datetime.strptime(
-            time,
-            "%Y-%m-%d %H:%M",
-        ).replace(tzinfo=ZoneInfo(user_timezone))
-        
-        server_time = user_time.astimezone(timezone.utc)
+
+        user_timezone = self.esp32_args.get("timezone", "Europe/Brussels")
+        server_time = self._convert_to_server_time(time, user_timezone)
 
         task = Task(
             device=self.esp32_args["mac"],

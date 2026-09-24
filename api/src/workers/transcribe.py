@@ -1,10 +1,12 @@
 from databases.redis_db import RedisDatabase
-from services.transcriptor import Transcriptor
+# from services.transcriptor import Transcriptor
+from services.groq_transcriptor import Transcriptor
 from config import (REDIS_KEY_PREFIX_TRANSCRIPTION, SIGNAL_TRANSCRIPTION_START, SIGNAL_TRANSCRIPTION_END, 
     REDIS_KEY_PREFIX_RECORD, SIGNAL_RECORDING_START, SIGNAL_RECORDING_END, TRANSCRIPTION_CHUNK_SIZE, #
     TRANSCRIPTION_WINDOW_SIZE, VOICE_LANGUAGE)
 import asyncio
 from services.test_utils import test_received_audio
+import traceback
 
 _ASYNC_GENERATOR_END = object() # Object used to signal the end of the async generator
 
@@ -46,74 +48,87 @@ async def worker_transcribe(
     print(f"[WORKER TRANS] Started: {trans_key}")
     
     temp_wav = b""
-    
-    while True:
-        enough_audio_bytes_for_transcription = False
-        new_segment_ready_for_transcription = False
-        # Wait for a new audio chunk to be available in Redis
-        audio_stream_id = REDIS_KEY_PREFIX_RECORD + just_id
-        result = await redis_db.blpop(audio_stream_id)
-        
-        if result is None:
-            break
-        else:
-            _, audio = result
-        
-        if audio is None:
-            break
-                
-        isAudioChunk = audio not in [bytes(SIGNAL_RECORDING_START, 'utf-8'), bytes(SIGNAL_RECORDING_END, 'utf-8')]
-         
-        if isAudioChunk and isinstance(audio, bytes):
-            # print(f"[WORKER] Received audio chunk: {len(element)} bytes")
-            temp_wav += audio
-            remaining_audio.extend(audio)
-            is_first_segment = segment_counter == 0
-            enough_audio_bytes_for_transcription = len(remaining_audio) >= TRANSCRIPTION_CHUNK_SIZE
+    try:
+        while True:
+            enough_audio_bytes_for_transcription = False
+            new_segment_ready_for_transcription = False
+            # Wait for a new audio chunk to be available in Redis
+            audio_stream_id = REDIS_KEY_PREFIX_RECORD + just_id
+            result = await redis_db.blpop(audio_stream_id)
             
-        if enough_audio_bytes_for_transcription:
-            if is_first_segment: # for the first segment, no need to glide the window
-                segment_to_transcribe = bytes(remaining_audio[:TRANSCRIPTION_CHUNK_SIZE])
-                del remaining_audio[:TRANSCRIPTION_CHUNK_SIZE]
-                new_segment_ready_for_transcription = True
+            if result is None:
+                break
             else:
-                SPLITTER = TRANSCRIPTION_CHUNK_SIZE-TRANSCRIPTION_WINDOW_SIZE
-                first_part = segment_to_transcribe[SPLITTER:]
-                second_part = bytes(remaining_audio[:SPLITTER])
-                segment_to_transcribe = (first_part + second_part)
-                del remaining_audio[:SPLITTER]
-                segment_to_transcribe = first_part + second_part
-                new_segment_ready_for_transcription = True
-        elif audio == bytes(SIGNAL_RECORDING_END, 'utf-8'):
-            segment_to_transcribe = remaining_audio
-            remaining_audio = bytearray()
-            new_segment_ready_for_transcription = True
-        
-        if (new_segment_ready_for_transcription):
-            segment_counter += 1
-            lang = VOICE_LANGUAGE
-            if lang == "auto":
-                lang = None
-            print(f"[WORKER TRANS] Transcribing segment {segment_counter} for: {audio_stream_id}")
-            # --- seul changement : boucle sync remplacée par le wrapper async ---
-            async for words, lang in async_generator_wrapper(
-                transcriptor.transcribe, segment_to_transcribe, lang
-            ):
-                print(f"[WORKER-TRANS] Transcription result for segment {segment_counter}: {words} (lang: {lang})")
-                await redis_db.r_push_expire(
-                    trans_key, 
-                    f"{segment_counter}:{words}"
-                )
-            await redis_db.setKey(trans_key + "_lang", lang)
+                _, audio = result
+            
+            if audio is None:
+                break
+                    
+            isAudioChunk = audio not in [bytes(SIGNAL_RECORDING_START, 'utf-8'), bytes(SIGNAL_RECORDING_END, 'utf-8')]
+            
+            if isAudioChunk and isinstance(audio, bytes):
+                # print(f"[WORKER] Received audio chunk: {len(element)} bytes")
+                temp_wav += audio
+                remaining_audio.extend(audio)
+                is_first_segment = segment_counter == 0
+                enough_audio_bytes_for_transcription = len(remaining_audio) >= TRANSCRIPTION_CHUNK_SIZE
                 
-        if audio == bytes(SIGNAL_RECORDING_START, 'utf-8'):
-            await redis_db.r_push_expire(trans_key, SIGNAL_TRANSCRIPTION_START)
-            print(f"[WORKER-TRANS] Received recording start for: {audio_stream_id}")
-            continue  # Skip processing if the start signal is received
+            if enough_audio_bytes_for_transcription:
+                if is_first_segment: # for the first segment, no need to glide the window
+                    segment_to_transcribe = bytes(remaining_audio[:TRANSCRIPTION_CHUNK_SIZE])
+                    del remaining_audio[:TRANSCRIPTION_CHUNK_SIZE]
+                    new_segment_ready_for_transcription = True
+                else:
+                    SPLITTER = TRANSCRIPTION_CHUNK_SIZE-TRANSCRIPTION_WINDOW_SIZE
+                    first_part = segment_to_transcribe[SPLITTER:]
+                    second_part = bytes(remaining_audio[:SPLITTER])
+                    segment_to_transcribe = (first_part + second_part)
+                    del remaining_audio[:SPLITTER]
+                    segment_to_transcribe = first_part + second_part
+                    new_segment_ready_for_transcription = True
+            elif audio == bytes(SIGNAL_RECORDING_END, 'utf-8'):
+                segment_to_transcribe = remaining_audio
+                remaining_audio = bytearray()
+                new_segment_ready_for_transcription = True
+            
+            if (new_segment_ready_for_transcription):
+                segment_counter += 1
+                lang = VOICE_LANGUAGE
+                if lang == "auto":
+                    lang = None
+                print(f"[WORKER TRANS] Transcribing segment {segment_counter} for: {audio_stream_id}")
+                # --- seul changement : boucle sync remplacée par le wrapper async ---
+                async for words, lang in async_generator_wrapper(
+                    transcriptor.transcribe, segment_to_transcribe, lang
+                ):
+                    print(f"[WORKER-TRANS] Transcription result for segment {segment_counter}: {words} (lang: {lang})")
+                    await redis_db.r_push_expire(
+                        trans_key, 
+                        f"{segment_counter}:{words}"
+                    )
+                if lang is not None:
+                    await redis_db.setKey(trans_key + "_lang", lang)
+                    
+            if audio == bytes(SIGNAL_RECORDING_START, 'utf-8'):
+                await redis_db.r_push_expire(trans_key, SIGNAL_TRANSCRIPTION_START)
+                print(f"[WORKER-TRANS] Received recording start for: {audio_stream_id}")
+                continue  # Skip processing if the start signal is received
+            
+            if audio == bytes(SIGNAL_RECORDING_END, 'utf-8'):
+                test_received_audio(temp_wav)
+                # segment_to_transcribe = processed_audio_bytes
+                print(f"[WORKER-TRANS] Received recording end for: {audio_stream_id}")
+                await redis_db.r_push_expire(trans_key, SIGNAL_TRANSCRIPTION_END)
+                break  # Exit the loop if the end signal is received
+
+    except ConnectionClosed as e:
+        print(f"[WORKER-TRANS] WebSocket closed: {e}")
         
-        if audio == bytes(SIGNAL_RECORDING_END, 'utf-8'):
-            test_received_audio(temp_wav)
-            # segment_to_transcribe = processed_audio_bytes
-            print(f"[WORKER-TRANS] Received recording end for: {audio_stream_id}")
-            await redis_db.r_push_expire(trans_key, SIGNAL_TRANSCRIPTION_END)
-            break  # Exit the loop if the end signal is received
+    except Exception as e:
+        print(f"[WORKER-TRANS] Exception occurred: {e}")
+        traceback.print_exc()
+        raise
+
+    finally:
+        print("[WORKER-TRANS] Worker finished")
+        
